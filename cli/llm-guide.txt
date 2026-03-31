@@ -1,0 +1,323 @@
+LLM USAGE GUIDE:
+
+  PREFERRED WORKFLOW — individual CLI commands (one per action, no scripting):
+
+    Example: log into a web app and verify dashboard
+      web-interact --headless open "https://app.example.com/login"
+      web-interact --headless discover
+      # → [1] input "Email" [2] input[password] "Password" [3] button "Sign in"
+      web-interact --headless fill 1 "user@company.com"
+      web-interact --headless fill 2 "s3cureP@ss!"
+      web-interact --headless click 3
+      web-interact --headless wait --url "**/dashboard"
+      web-interact --headless get title
+      # → Dashboard - MyApp
+
+    Example: fill a checkout form with dropdowns and checkboxes
+      web-interact --headless open "https://shop.example.com/checkout"
+      web-interact --headless discover
+      web-interact --headless fill 2 "Jane Smith"
+      web-interact --headless fill 4 "jane@example.com"
+      web-interact --headless select 6 "United States"
+      web-interact --headless fill 8 "123 Main St, Apt 4B"
+      web-interact --headless fill 10 "94102"
+      web-interact --headless check 12
+      web-interact --headless click 14
+      web-interact --headless wait --text "Order confirmed"
+
+    Example: extract data from a page
+      web-interact --headless open "https://news.example.com"
+      web-interact --headless eval "Array.from(document.querySelectorAll('article h2')).map(h => h.textContent.trim())"
+      web-interact --headless get count "article"
+
+    Example: mock an API and test the frontend
+      web-interact --headless network route "*/api/users" --body '[{"id":1,"name":"Test"}]'
+      web-interact --headless open "https://app.example.com/users"
+      web-interact --headless get text ".user-list"
+
+    Example: visual debugging with --vision
+      web-interact --headless --vision open "https://myapp.com/settings"
+      # → stderr: vision:/path/to/vision.png (plain screenshot)
+      web-interact --headless --vision click 5
+      # → stderr: vision:/path/to/vision.png (updated after click)
+      # Add --annotate to overlay element numbers on the screenshot:
+      web-interact --headless --vision --annotate open "https://myapp.com/settings"
+
+    Example: connect to user's running Chrome
+      web-interact --connect discover
+      web-interact --connect screenshot --annotate
+
+    OUTPUT CONTRACT:
+      Actions (click, fill, press, etc.): silent on success (exit 0), error text to stderr (exit 1).
+      Getters (get url, eval, etc.): raw value to stdout.
+      Data (tab list, cookies, storage): JSON to stdout.
+      Errors: plain text to stderr, no JSON.
+
+    COMMANDS — full list:
+      open, discover, snapshot, click, dblclick, type, fill, select, check, uncheck,
+      hover, focus, scrollintoview, press, scroll, drag, upload, pdf, screenshot, eval,
+      wait, close, find (role|text|label|placeholder), get (url|title|text|html|value|
+      attr|box|visible|enabled|checked|count|styles), tab (list|new|switch|close),
+      cookies (get|set|clear), storage (local|local-set|session|session-set),
+      clipboard (read|write), mouse (move|click|down|up|wheel),
+      keyboard (type|insert|press|down|up), set (viewport|geo|offline|media|headers),
+      network (requests|block|route|unroute)
+
+    FLAGS: --headless, --browser NAME, --connect [URL], --vision, --vision --annotate, --timeout SECONDS,
+      --page NAME, --ignore-https-errors
+
+    Element indices auto-refresh when page URL changes. No manual re-discover needed.
+
+  Script mode for complex workflows (multiple steps in one call):
+    web-interact run script.js
+    web-interact <<'EOF'
+    ...multi-step script...
+    EOF
+
+  SCRIPT WORKFLOW — discover then act by index:
+    web-interact <<'EOF'
+    const page = await browser.getPage("main");
+    await page.goto("https://example.com");
+
+    // Step 1: Discover all interactive elements (instant, no timeouts)
+    const els = await browser.discover("main");
+    console.log(els.serialized);
+    // Output:
+    //   [1] input "Name"
+    //   [2] input[email] "Email"
+    //   [3] button "Submit"
+
+    // Step 2: Act by index number (uses real CDP mouse/keyboard events)
+    await browser.type("main", 1, "John Doe");    // type into element [1]
+    await browser.type("main", 2, "john@test.com"); // type into element [2]
+    await browser.click("main", 3);                 // click element [3]
+    EOF
+
+  browser.discover(pageName) — settle + detect all interactive elements in one call.
+    Returns { count, serialized, elements[] }. Each element has an index [N].
+    Use the index with click/type/select/check.
+
+  browser.click(pageName, index)  — CDP mouse click on element [N]
+  browser.type(pageName, index, text) — CDP keyboard type into element [N]
+  browser.select(pageName, index, value) — select dropdown option on element [N]
+  browser.check(pageName, index, checked?) — toggle checkbox/radio on element [N]
+
+  These use real browser-level events (CDP Input.dispatchMouseEvent/KeyEvent).
+  No Playwright timeouts, no retry loops, no actionability checks.
+  Works with React, Vue, Angular, Canvas, Google Sheets — everything.
+
+  Quick inspection:
+    web-interact --connect <<'EOF'
+    const tabs = await browser.listPages();
+    console.log(JSON.stringify(tabs, null, 2));
+    EOF
+
+    web-interact --connect <<'EOF'
+    const page = await browser.getPage("TARGET_ID_HERE");
+    console.log(JSON.stringify({
+      url: page.url(),
+      title: await page.title(),
+    }, null, 2));
+    EOF
+
+  Interactive element discovery (PREFERRED — instant, no timeouts):
+    web-interact <<'EOF'
+    const page = await browser.getPage("main");
+    await page.goto("https://example.com");
+    // Wait for page to settle, then get all interactive elements
+    await browser.waitForSettled("main", { quietMs: 300 });
+    const inv = await browser.getInteractiveElements("main", {});
+    console.log(inv.serialized);
+    // Output:
+    //   [1] button "Submit"
+    //   [2] input[email] "Email" placeholder="user@example.com"
+    //   [3] link "Sign in" href="/login"
+    //   [4] select "Country" (190 options: US, UK, DE, ...)
+    // Then interact using selectors from the inventory:
+    const target = inv.elements.find(e => e.name === "Submit");
+    if (target) await browser.clickElement("main", target.selector);
+    EOF
+
+  The discover-then-act pattern (zero timeout risk):
+    1. browser.waitForSettled(name, opts) — wait for DOM to stop changing
+    2. browser.getInteractiveElements(name, opts) — get indexed inventory
+    3. browser.clickElement(name, selector) — native DOM click (instant)
+    4. browser.fillElement(name, selector, value) — native fill (React/Vue compatible)
+
+  getInteractiveElements detects:
+    - Native interactive tags (a, button, input, select, textarea)
+    - ARIA widget roles (button, link, checkbox, textbox, combobox, slider, tab, ...)
+    - JS event listeners (React onClick, Vue @click) via CDP
+    - contenteditable, tabindex, cursor:pointer
+    - Filters invisible elements, honeypot traps, off-screen elements
+    - Shows compound info: select options, date formats, range values
+    - Marks new elements with * prefix on repeated calls
+    - Returns CSS selectors AND XPaths for each element
+
+  AI snapshots (alternative — use when you need the full accessibility tree):
+    web-interact <<'EOF'
+    const page = await browser.getPage("main");
+    const result = await page.ariaSnapshot();
+    console.log(result.full);
+    // Returns accessibility tree as string.
+    // Optional args: { track?: string, depth?: number, timeout?: number }.
+    EOF
+
+  IMPORTANT: ariaSnapshot() refs ([ref=eN]) are ONLY valid within the same script run.
+  Do NOT save refs from one script and use them in the next — they will timeout.
+  For cross-script targeting, use stable selectors: page.getByRole(), page.getByLabel(),
+  page.getByRole('textbox').nth(N), or CSS selectors via page.locator().
+
+  IMPORTANT: Do not combine ariaSnapshot() with interactions in a short-timeout script.
+  The snapshot alone can take 3-5s on complex pages, leaving no time for clicks/typing.
+  Either: discover in one script, interact in the next; or skip snapshot and use
+  page.evaluate() or getByRole() directly.
+
+  Choosing your approach:
+    Standard web pages: browser.discover() → browser.click/type/select by index.
+    Canvas apps (Google Sheets, Docs, Figma, Miro): keyboard shortcuts + page.keyboard +
+      browser.clickAt(x, y) for canvas coordinates + screenshots to verify.
+    Known pages/selectors: direct Playwright page.click/page.fill selectors.
+
+  Canvas/WebGL apps (Google Sheets, Figma, Google Docs, Miro, Canva, Maps):
+    These render content on <canvas>/<WebGL>, so discover() only sees the toolbar/chrome,
+    NOT the actual content (cells, shapes, text). Use this pattern instead:
+    1. discover() to find toolbar controls (font, zoom, format buttons)
+    2. page.keyboard for cell/content navigation (Tab, Enter, arrow keys, shortcuts)
+    3. browser.clickAt(name, x, y) for clicking inside the canvas at specific coordinates
+    4. browser.drag(name, x1, y1, x2, y2) for drawing/dragging on canvas
+    5. Screenshots to see the visual state of the canvas
+    6. page.keyboard.type(text) for typing into the active element
+
+    Google Sheets specific:
+      - Navigate to cells via the Name Box (discover finds it — look for input id="t-name-box")
+      - Click name box, type cell ref (e.g., "A1"), press Enter
+      - Type cell content with page.keyboard.type(), Tab=next column, Enter=next row
+      - Bold: Ctrl/Meta+B, etc. — use keyboard shortcuts for formatting
+
+  Screenshot best practices:
+    ALWAYS scroll/navigate to what you want to see BEFORE taking a screenshot.
+    A screenshot shows only what's visible in the viewport right now.
+    - Before: page.keyboard.press("Control+Home") to go to top of document
+    - Before: element.scrollIntoView() to center a specific element
+    - Before: navigate to the correct sheet tab / page / section
+    - Use page.screenshot({ clip: { x, y, width, height } }) to capture a specific region
+    - After taking a screenshot, read it with the Read tool to see the visual state.
+
+  DOM discovery with evaluate (faster than screenshots for structure questions):
+    web-interact --connect <<'EOF'
+    const page = await browser.getPage("main");
+    // Explore DOM structure — much faster than taking a screenshot
+    const info = await page.evaluate(() => ({
+      title: document.title,
+      headings: Array.from(document.querySelectorAll('h1,h2,h3')).map(h => h.textContent),
+      forms: document.querySelectorAll('form').length,
+      buttons: Array.from(document.querySelectorAll('button')).map(b => b.textContent?.trim()),
+    }));
+    console.log(JSON.stringify(info, null, 2));
+    EOF
+
+  Screenshots for visual state:
+    Only use screenshots when you need to see layout, styling, or visual regressions.
+    For DOM structure questions, use page.evaluate() instead — it's one line vs 3 round trips.
+    web-interact <<'EOF'
+    const page = await browser.getPage("main");
+    const buf = await page.screenshot();
+    const path = await saveScreenshot(buf, "debug.png");
+    console.log(path);
+    EOF
+
+  Tab management in --connect mode:
+    When connecting to a user's Chrome, always bring the tab to the foreground:
+    web-interact --connect <<'EOF'
+    const pages = await browser.listPages();
+    const target = pages.find(p => p.url.includes("example.com"));
+    const page = await browser.getPage(target.id);
+    await page.bringToFront();  // User sees the interaction
+    console.log(JSON.stringify({ url: page.url(), title: await page.title() }));
+    EOF
+
+  Waiting patterns:
+    web-interact <<'EOF'
+    const page = await browser.getPage("search-results");
+    await page.waitForSelector(".results");
+    await page.waitForURL("**/success");
+    console.log(JSON.stringify({
+      url: page.url(),
+      title: await page.title(),
+    }, null, 2));
+    EOF
+
+  Chrome 136+ connect mode:
+    Chrome 136+ silently ignores --remote-debugging-port on the default profile.
+    You MUST use --user-data-dir AND kill all Chrome processes first:
+      killall -9 "Google Chrome" 2>/dev/null; sleep 2
+      /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+        --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-debug-profile" &
+      sleep 4
+      curl -s http://127.0.0.1:9222/json/version  # verify before connecting
+
+  Error recovery:
+    If a script fails, the page usually stays where it stopped.
+    Reconnect to the same page name and explore with evaluate(), not screenshots:
+    web-interact <<'EOF'
+    const page = await browser.getPage("checkout");
+    const info = await page.evaluate(() => ({
+      url: window.location.href,
+      title: document.title,
+      text: document.body.innerText.substring(0, 500),
+    }));
+    console.log(JSON.stringify(info, null, 2));
+    EOF
+
+  browser.* methods (zero Playwright timeouts — all use CDP or native DOM):
+    browser.discover(name, opts)                 Settle + detect all interactive elements, returns indexed list
+    browser.click(name, index)                   CDP mouse click on element [N] from discover()
+    browser.type(name, index, text)              CDP keyboard type into element [N] from discover()
+    browser.select(name, index, value)           Select dropdown option on element [N]
+    browser.check(name, index, checked?)         Toggle checkbox/radio on element [N]
+    browser.clickAt(name, x, y, opts?)           CDP click at viewport coordinates (for canvas/WebGL apps)
+    browser.drag(name, x1, y1, x2, y2, opts?)   CDP drag between coordinates (for drawing/sliders)
+    browser.getInteractiveElements(name, opts)   Low-level: detect without settling (prefer discover)
+    browser.waitForSettled(name, opts)            Low-level: wait for network+DOM quiet
+    browser.clickElement(name, selector)          Low-level: JS click by CSS selector
+    browser.fillElement(name, selector, value)    Low-level: JS fill by CSS selector
+
+  Common Playwright Page methods:
+    page.goto(url)                         Navigate to a URL
+    page.title()                           Get the current page title
+    page.url()                             Get the current URL
+    page.ariaSnapshot(options)            Get accessibility tree snapshot
+                                           Options: { track?: string, depth?: number, timeout?: number }
+    page.getByRole(role, { name })         Target elements by ARIA role (stable across scripts)
+    page.getByLabel(text)                  Target form elements by label
+    page.evaluate(fn)                      Run JavaScript in the page context (plain JS only)
+    page.$$eval(selector, fn)              Run a function on all matching elements
+    page.$eval(selector, fn)               Run a function on the first matching element
+    page.textContent(selector)             Get the text content of an element
+    page.innerHTML(selector)               Get the inner HTML of an element
+    page.fill(selector, value)             Fill an input field (instant, use for standard inputs)
+    page.click(selector)                   Click an element
+    page.type(selector, text)              Type character by character (use for autocomplete/canvas)
+    page.press(selector, key)              Press a key such as Enter or Tab
+    page.keyboard.type(text, {delay})      Type via keyboard (for canvas apps like Google Sheets)
+    page.keyboard.press(key)               Press a key without a selector
+    page.mouse.move(x, y, {steps})         Move mouse (steps > 1 for interpolated movement)
+    page.mouse.click(x, y)                Click at coordinates
+    page.bringToFront()                    Bring tab to foreground (essential in --connect mode)
+    page.waitForSelector(selector)         Wait for an element to appear
+    page.waitForURL(url)                   Wait for navigation to a URL
+    page.waitForTimeout(ms)                Pause within a script (for pacing, not shell sleep)
+    page.screenshot()                      Capture a screenshot buffer; save with saveScreenshot(...)
+    page.locator(selector)                 Create a locator for chained actions
+
+  Tips:
+    - Use console.log(JSON.stringify(...)) for structured output.
+    - Prefer page.evaluate() for DOM questions; use screenshots only for visual inspection.
+    - Keep page names stable across scripts so you can resume work after failures.
+    - Each --browser name maps to a separate daemon-managed browser instance.
+    - Use --connect to attach to an existing browser; omit the URL to auto-discover.
+    - Use short timeouts so scripts fail fast instead of hanging on missing elements.
+    - Always call page.bringToFront() in --connect mode so the user sees the interaction.
+    - Add --headless for unattended automation; omit it when you want to watch the browser.
+    - For canvas apps (Google Sheets, Figma), use page.keyboard.type() — CSS selectors won't work on canvas.

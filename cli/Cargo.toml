@@ -1,0 +1,29 @@
+[package]
+categories = ["command-line-utilities", "web-programming", "development-tools::testing"]
+description = "Browser automation CLI for AI agents — navigate, discover elements, click, fill forms, take screenshots, extract data via CDP"
+edition = "2024"
+exclude = ["benches/", "scripts/", ".github/"]
+keywords = ["browser", "claude", "agent", "cua", "web"]
+license = "MIT"
+name = "web-interact"
+homepage = "https://github.com/johnkozaris/web-interact"
+repository = "https://github.com/johnkozaris/web-interact"
+authors = ["John Kozaris <ioanniskozaris@gmail.com>"]
+readme = "../README.md"
+rust-version = "1.85"
+version = "0.1.0"
+
+[dependencies]
+clap = {version = "4.6", features = ["derive"]}
+dirs = "6.0"
+interprocess = "2.4"
+libc = "0.2.184"
+serde = {version = "1.0.228", features = ["derive"]}
+serde_json = "1.0.149"
+tempfile = "3.27.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

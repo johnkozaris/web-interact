@@ -1,0 +1,57 @@
+{
+  "name": "web-interact",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser automation CLI for AI agents with CDP-based element discovery",
+  "type": "module",
+  "author": {
+    "name": "John Kozaris",
+    "email": "ioanniskozaris@gmail.com",
+    "url": "https://github.com/johnkozaris"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johnkozaris/web-interact.git"
+  },
+  "homepage": "https://github.com/johnkozaris/web-interact",
+  "bugs": {
+    "url": "https://github.com/johnkozaris/web-interact/issues"
+  },
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "./setup.sh --build",
+    "install:local": "./setup.sh --install-local",
+    "install:system": "./setup.sh --install-system",
+    "verify:repo": "node scripts/check-repo-policy.js",
+    "typecheck": "pnpm --dir daemon exec tsc --noEmit",
+    "test": "pnpm --dir daemon exec vitest run",
+    "bundle": "pnpm --dir daemon run bundle && pnpm --dir daemon run bundle:sandbox-client",
+    "build:cli": "cargo build --release --locked --manifest-path cli/Cargo.toml",
+    "verify": "pnpm run verify:repo && pnpm run typecheck && pnpm run bundle && pnpm run test && pnpm run build:cli",
+    "version:sync": "node scripts/sync-version.js",
+    "version": "pnpm run version:sync && git add cli/Cargo.toml cli/Cargo.lock"
+  },
+  "keywords": [
+    "browser",
+    "automation",
+    "cli",
+    "agent",
+    "cdp",
+    "chrome",
+    "headless",
+    "web",
+    "testing"
+  ],
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "patchright",
+      "patchright-core"
+    ]
+  }
+}

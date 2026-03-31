@@ -1,0 +1,53 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Rust build artifacts
+**/target/
+
+# Node build artifacts
+build/
+dist/
+
+# Daemon bundles (checked in selectively)
+daemon/dist/*
+!daemon/dist/daemon.bundle.mjs
+!daemon/dist/sandbox-client.js
+
+# Dependencies
+node_modules/
+daemon/node_modules/
+
+# Runtime state
+profiles/
+temp/
+tmp/
+coverage/
+
+# Prebuilt binaries (built for release, not checked in)
+bin/web-interact-*
+npm/packages/*/bin/web-interact
+npm/packages/*/bin/web-interact.exe
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor temp files
+*.swo
+*.swp
+*.tsbuildinfo
+
+# Scratch
+_scratch/
+npm/bin/web-interact-*
+bin/

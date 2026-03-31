@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+BINARY="${REPO_DIR}/bin/web-interact-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x64/')"
+
+if [[ ! -x "${BINARY}" ]]; then
+  echo "CLI binary not found. Run: ./setup.sh" >&2
+  exit 1
+fi
+
+exec "${BINARY}" "$@"

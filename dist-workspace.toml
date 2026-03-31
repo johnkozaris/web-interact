@@ -1,0 +1,37 @@
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.31.0"
+ci = "github"
+hosting = "github"
+
+# Platforms
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+
+# Installers
+installers = ["shell", "powershell", "npm"]
+npm-package = "web-interact"
+install-path = "CARGO_HOME"
+
+# Publishing
+publish-jobs = ["npm"]
+publish-prereleases = false
+
+# CI behavior
+pr-run-mode = "plan"
+fail-fast = false
+
+# Artifacts
+checksum = "sha256"
+auto-includes = true
+source-tarball = true
+
+# Security
+github-attestations = true
