@@ -266,41 +266,29 @@ export async function cdpType(
   text: string,
   options?: { clearFirst?: boolean; delay?: number }
 ): Promise<CDPTypeResult> {
-  const clearFirst = options?.clearFirst ?? true;
+  const clearFirst = options?.clearFirst ?? false;
   const delay = options?.delay ?? 5; // 5ms base → randomized to ~3-7ms
 
   try {
     await scrollIntoView(session, backendNodeId);
     await cdpFocus(session, backendNodeId);
 
-    // Clear existing text if requested
+    // Clear existing text if requested — uses native value setter to work with React/Vue controlled inputs
     if (clearFirst) {
-      // Select all + delete
-      await session.send("Input.dispatchKeyEvent", {
-        type: "keyDown",
-        key: "a",
-        code: "KeyA",
-        modifiers: 8, // Meta on Mac
-        windowsVirtualKeyCode: 65,
-      });
-      await session.send("Input.dispatchKeyEvent", {
-        type: "keyUp",
-        key: "a",
-        code: "KeyA",
-        modifiers: 8,
-        windowsVirtualKeyCode: 65,
-      });
-      await session.send("Input.dispatchKeyEvent", {
-        type: "keyDown",
-        key: "Backspace",
-        code: "Backspace",
-        windowsVirtualKeyCode: 8,
-      });
-      await session.send("Input.dispatchKeyEvent", {
-        type: "keyUp",
-        key: "Backspace",
-        code: "Backspace",
-        windowsVirtualKeyCode: 8,
+      const { object } = await session.send("DOM.resolveNode", { backendNodeId });
+      await session.send("Runtime.callFunctionOn", {
+        objectId: object.objectId,
+        functionDeclaration: `function() {
+          const proto = this instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) {
+            setter.call(this, '');
+          } else {
+            this.value = '';
+          }
+          this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+        }`,
       });
       await new Promise((r) => setTimeout(r, 20));
     }
