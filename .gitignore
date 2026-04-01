@@ -25,18 +25,16 @@ daemon/dist/*
 
 # Dependencies
 node_modules/
-daemon/node_modules/
 
 # Runtime state
 profiles/
 temp/
 tmp/
 coverage/
+local/
 
-# Prebuilt binaries (built for release, not checked in)
-bin/web-interact-*
-npm/packages/*/bin/web-interact
-npm/packages/*/bin/web-interact.exe
+# Prebuilt binaries
+bin/
 
 # Logs
 *.log
@@ -49,5 +47,3 @@ npm-debug.log*
 
 # Scratch
 _scratch/
-npm/bin/web-interact-*
-bin/

@@ -2,8 +2,11 @@
 members = ["cli"]
 resolver = "2"
 
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
+
 [profile.dist]
 inherits = "release"
-lto = true
-codegen-units = 1
-strip = true
