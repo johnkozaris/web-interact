@@ -270,6 +270,13 @@ interface QuickJSSandboxOptions {
   onStderr: (data: string) => void;
   memoryLimitBytes?: number;
   timeoutMs?: number;
+  humanize?: boolean;
+}
+
+/** When --humanize is active, add a random delay that feels human. */
+function humanDelay(minMs: number, maxMs: number): Promise<void> {
+  const ms = minMs + Math.floor(Math.random() * (maxMs - minMs));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 export class QuickJSSandbox {
@@ -1221,6 +1228,9 @@ export class QuickJSSandbox {
     };
 
     if (action === "click") {
+      if (this.#options.humanize) {
+        await humanDelay(80, 400);
+      }
       const urlBefore = (page as Page).url();
       const session = (await (page as Page).context().newCDPSession(page as Page)) as unknown as DOMCDPSession;
       try {
@@ -1254,12 +1264,15 @@ export class QuickJSSandbox {
           element: elContext,
         });
       }
+      if (this.#options.humanize) {
+        await humanDelay(60, 250);
+      }
       const session = (await (page as Page).context().newCDPSession(page as Page)) as unknown as DOMCDPSession;
       try {
         await session.send("DOM.enable");
         const result = await cdpType(session, el.backendNodeId, text, {
           clearFirst: opts.clearFirst,
-          delay: opts.delay,
+          delay: this.#options.humanize ? 30 + Math.floor(Math.random() * 90) : opts.delay,
         });
         return JSON.stringify({ ...result, element: elContext });
       } finally {
@@ -1268,6 +1281,9 @@ export class QuickJSSandbox {
     }
 
     if (action === "select") {
+      if (this.#options.humanize) {
+        await humanDelay(80, 350);
+      }
       if (el.tag !== "select" && el.role !== "listbox" && el.role !== "combobox") {
         return JSON.stringify({
           success: false,
@@ -1282,6 +1298,9 @@ export class QuickJSSandbox {
     }
 
     if (action === "check") {
+      if (this.#options.humanize) {
+        await humanDelay(80, 350);
+      }
       if (el.tag !== "input" && el.role !== "checkbox" && el.role !== "radio" && el.role !== "switch") {
         return JSON.stringify({
           success: false,

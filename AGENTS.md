@@ -39,8 +39,17 @@ Build order (important — cargo embeds the daemon bundle at compile time):
 - `--vision`: plain screenshot after each command
 - `--vision --annotate`: numbered element overlays on screenshot
 
+## Browser detection
+
+On first run, web-interact checks for Chrome or Edge on the system.
+- If found: uses the system browser directly (no download).
+- If not found: downloads Chromium as a fallback via Patchright.
+- Channel priority: Chrome → Edge → bundled Chromium.
+
 ## Important rules
 
 - Never use `--headless` for login pages from Google, Microsoft, GitHub, etc.
+- Use `--humanize` to interact like a human — recommended for login flows and form-heavy pages.
+- Use `--own-browser` to connect to the user's running Chrome/Edge instead of launching a new instance.
 - Always re-discover after navigation or DOM changes.
 - `fill` clears then types (for form fields). `type` appends (for autocomplete).

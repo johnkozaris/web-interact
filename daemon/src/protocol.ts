@@ -12,6 +12,7 @@ const ExecuteRequestSchema = RequestBaseSchema.extend({
   ignoreHTTPSErrors: z.boolean().optional(),
   connect: z.string().min(1).optional(),
   timeoutMs: z.number().int().positive().optional(),
+  humanize: z.boolean().optional(),
 });
 
 const BrowsersRequestSchema = RequestBaseSchema.extend({

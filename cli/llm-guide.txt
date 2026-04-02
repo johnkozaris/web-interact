@@ -43,9 +43,16 @@ LLM USAGE GUIDE:
       # Add --annotate to overlay element numbers on the screenshot:
       web-interact --headless --vision --annotate open "https://myapp.com/settings"
 
-    Example: connect to user's running Chrome
+    Example: connect to user's running Chrome or Edge
       web-interact --connect discover
       web-interact --connect screenshot --annotate
+      web-interact --own-browser discover          # shorthand for --connect auto
+
+    Example: interact like a human (natural pacing for login flows, forms, etc.)
+      web-interact --humanize open "https://accounts.google.com"
+      web-interact --humanize discover
+      web-interact --humanize fill 1 "user@gmail.com"
+      web-interact --humanize click 3
 
     OUTPUT CONTRACT:
       Actions (click, fill, press, etc.): silent on success (exit 0), error text to stderr (exit 1).
@@ -63,8 +70,8 @@ LLM USAGE GUIDE:
       keyboard (type|insert|press|down|up), set (viewport|geo|offline|media|headers),
       network (requests|block|route|unroute)
 
-    FLAGS: --headless, --browser NAME, --connect [URL], --vision, --vision --annotate, --timeout SECONDS,
-      --page NAME, --ignore-https-errors
+    FLAGS: --headless, --browser NAME, --connect [URL], --own-browser, --humanize,
+      --vision, --vision --annotate, --timeout SECONDS, --page NAME, --ignore-https-errors
 
     Element indices auto-refresh when page URL changes. No manual re-discover needed.
 

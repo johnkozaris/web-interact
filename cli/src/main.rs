@@ -388,7 +388,7 @@ fn send_vision_script(cli: &Cli, script: &str) -> Result<i32, Box<dyn Error>> {
     if cli.headless {
         request["headless"] = Value::Bool(true);
     }
-    if cli.humanize {
+    if resolve_humanize(cli) {
         request["humanize"] = Value::Bool(true);
     }
     if cli.ignore_https_errors {
@@ -398,6 +398,14 @@ fn send_vision_script(cli: &Cli, script: &str) -> Result<i32, Box<dyn Error>> {
         request["connect"] = Value::String(endpoint);
     }
     send_request(request, ResultMode::Json, None)
+}
+
+/// Humanize is on if --humanize flag is set OR mode is assistant.
+fn resolve_humanize(cli: &Cli) -> bool {
+    if cli.humanize {
+        return true;
+    }
+    paths::read_mode().unwrap_or_else(|_| "default".to_string()) == "assistant"
 }
 
 fn resolve_connect(cli: &Cli) -> Option<String> {
@@ -423,7 +431,7 @@ fn send_execute(cli: &Cli, script: &str, timeout_ms: u64) -> Result<i32, Box<dyn
         request["headless"] = Value::Bool(true);
     }
 
-    if cli.humanize {
+    if resolve_humanize(cli) {
         request["humanize"] = Value::Bool(true);
     }
 
