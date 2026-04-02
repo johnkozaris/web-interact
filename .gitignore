@@ -16,9 +16,8 @@ Thumbs.db
 
 # Node build artifacts
 build/
-dist/
 
-# Daemon bundles (checked in selectively)
+# Daemon bundles — selectively tracked (CLI embeds these at compile time)
 daemon/dist/*
 !daemon/dist/daemon.bundle.mjs
 !daemon/dist/sandbox-client.js
