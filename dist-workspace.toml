@@ -35,3 +35,4 @@ source-tarball = true
 
 # Security
 github-attestations = true
+allow-dirty = ["ci"]
