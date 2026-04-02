@@ -2,7 +2,7 @@
 
 Browser automation CLI for AI agents and scripts. Each shell command maps to one browser action — navigate, discover elements, click, fill forms, take screenshots, extract data.
 
-Uses real Chrome via Patchright for undetected automation. Actions are silent on success. Errors are plain text. Output never floods the agent's context window.
+Uses real Chrome via Patchright (Playwright fork). Actions are silent on success. Errors are plain text. Output never floods the agent's context window. Designed for automating your own web applications — please use responsibly.
 
 ## Usage
 

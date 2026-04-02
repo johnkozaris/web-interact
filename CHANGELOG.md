@@ -8,7 +8,7 @@ Initial open-source release.
 - 40+ CLI commands for browser automation
 - DOM mode: discover interactive elements, act by index
 - Vision mode: --vision (plain screenshot), --vision --annotate (numbered overlays)
-- Undetected Chrome via Patchright
+- Real Chrome via Patchright (Playwright fork)
 - Silent output contract: actions silent on success, getters print raw values
 - Auto-install runtime on first run (~/.web-interact/)
 - Live element indices: auto-refresh on page navigation
@@ -20,4 +20,4 @@ Initial open-source release.
 ### Architecture
 - Rust CLI (edition 2024) + Node.js daemon + QuickJS WASM sandbox
 - CDP-based element discovery (AX tree + DOMSnapshot + JS listeners)
-- Patchright 1.58.2 (Playwright fork with anti-detection)
+- Patchright 1.59.1 (Playwright fork)
