@@ -338,7 +338,13 @@ pub enum ActionCommand {
     },
 
     // --- Existing commands ---
-    #[command(about = "Install the embedded Patchright runtime and headless Chromium")]
+    #[command(about = "Show or change the browser engine mode (default or assistant)")]
+    Mode {
+        #[arg(help = "Mode: 'default' (Playwright) or 'assistant' (Patchright)")]
+        target: Option<String>,
+    },
+
+    #[command(about = "Install the browser runtime and headless Chromium")]
     Install,
 
     #[command(about = "Install the web-interact skill into agent skill directories")]
@@ -762,6 +768,7 @@ pub enum NetworkCommand {
 pub fn generate_script(command: &ActionCommand) -> Option<String> {
     match command {
         ActionCommand::Run { .. }
+        | ActionCommand::Mode { .. }
         | ActionCommand::Install
         | ActionCommand::InstallSkill
         | ActionCommand::Browsers

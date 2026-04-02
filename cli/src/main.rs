@@ -57,8 +57,10 @@ Modes:
 
 Flags:
   --browser NAME       Named browser instance (default: "default")
-  --connect [URL]      Connect to running Chrome (auto-discovers if no URL)
+  --connect [URL]      Connect to running Chrome/Edge (auto-discovers if no URL)
+  --own-browser        Use your own running browser (shorthand for --connect auto)
   --headless           Launch without visible window
+  --humanize           Interact like a human — natural delays on clicks and typing
   --timeout SECONDS    Script timeout (default: 20s)"###;
 
 const CLI_AFTER_LONG_HELP: &str = include_str!("../llm-guide.txt");
@@ -93,10 +95,24 @@ struct Cli {
 
     #[arg(
         long,
-        help = "Launch daemon-managed Chromium without a visible window",
+        help = "Use your own running browser instead of the managed one (auto-discovers Chrome/Edge)",
+        global = true,
+    )]
+    own_browser: bool,
+
+    #[arg(
+        long,
+        help = "Launch daemon-managed browser without a visible window",
         global = true,
     )]
     headless: bool,
+
+    #[arg(
+        long,
+        help = "Interact like a human — adds natural delays between clicks, keystrokes, and actions",
+        global = true,
+    )]
+    humanize: bool,
 
     #[arg(
         long,
@@ -186,6 +202,49 @@ fn run() -> Result<i32, Box<dyn Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
+        // Mode: show or switch browser engine
+        Some(ActionCommand::Mode { target }) => {
+            match target {
+                None => {
+                    let mode = paths::read_mode().unwrap_or_else(|_| "default".to_string());
+                    let engine = if mode == "assistant" { "Patchright" } else { "Playwright" };
+                    println!("{mode} ({engine})");
+                    Ok(0)
+                }
+                Some(new_mode) => {
+                    let new_mode = new_mode.to_lowercase();
+                    if new_mode != "default" && new_mode != "assistant" {
+                        eprintln!("Invalid mode: {new_mode}. Use 'default' or 'assistant'.");
+                        return Ok(1);
+                    }
+
+                    // Stop daemon if running
+                    if is_daemon_running() {
+                        let daemon_pid = current_daemon_pid();
+                        let _ = send_request(
+                            json!({ "id": request_id("stop"), "type": "stop" }),
+                            ResultMode::None,
+                            None,
+                        );
+                        if let Some(pid) = daemon_pid {
+                            let _ = wait_for_daemon_exit(pid, Duration::from_secs(10));
+                        }
+                    }
+
+                    // Nuke ~/.web-interact/ and write fresh mode file
+                    let base_dir = paths::web_interact_base_dir()?;
+                    if base_dir.exists() {
+                        fs::remove_dir_all(&base_dir)?;
+                    }
+                    paths::write_mode(&new_mode)?;
+
+                    let engine = if new_mode == "assistant" { "Patchright" } else { "Playwright" };
+                    println!("Switched to {new_mode} mode ({engine}).");
+                    println!("Runtime will be reinstalled on next command.");
+                    Ok(0)
+                }
+            }
+        }
         // Commands handled without script generation
         Some(ActionCommand::Run { file }) => {
             let script = fs::read_to_string(file)?;
@@ -329,13 +388,26 @@ fn send_vision_script(cli: &Cli, script: &str) -> Result<i32, Box<dyn Error>> {
     if cli.headless {
         request["headless"] = Value::Bool(true);
     }
+    if cli.humanize {
+        request["humanize"] = Value::Bool(true);
+    }
     if cli.ignore_https_errors {
         request["ignoreHTTPSErrors"] = Value::Bool(true);
     }
-    if let Some(endpoint) = &cli.connect {
-        request["connect"] = Value::String(endpoint.clone());
+    if let Some(endpoint) = resolve_connect(cli) {
+        request["connect"] = Value::String(endpoint);
     }
     send_request(request, ResultMode::Json, None)
+}
+
+fn resolve_connect(cli: &Cli) -> Option<String> {
+    if let Some(endpoint) = &cli.connect {
+        return Some(endpoint.clone());
+    }
+    if cli.own_browser {
+        return Some("auto".to_string());
+    }
+    None
 }
 
 fn send_execute(cli: &Cli, script: &str, timeout_ms: u64) -> Result<i32, Box<dyn Error>> {
@@ -351,12 +423,16 @@ fn send_execute(cli: &Cli, script: &str, timeout_ms: u64) -> Result<i32, Box<dyn
         request["headless"] = Value::Bool(true);
     }
 
+    if cli.humanize {
+        request["humanize"] = Value::Bool(true);
+    }
+
     if cli.ignore_https_errors {
         request["ignoreHTTPSErrors"] = Value::Bool(true);
     }
 
-    if let Some(endpoint) = &cli.connect {
-        request["connect"] = Value::String(endpoint.clone());
+    if let Some(endpoint) = resolve_connect(cli) {
+        request["connect"] = Value::String(endpoint);
     }
 
     send_request(request, ResultMode::Json, cli.save.as_deref())

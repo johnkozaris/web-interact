@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { BrowserManager } from "./browser-manager.js";
 import { createKeyedLock, createMutex } from "./lock.js";
@@ -9,6 +11,7 @@ import {
   getDaemonEndpoint,
   getWebInteractBaseDir,
   getPidPath,
+  readMode,
   requiresDaemonEndpointCleanup,
 } from "./local-endpoint.js";
 import { parseRequest, serialize, type ExecuteRequest, type Response } from "./protocol.js";
@@ -181,6 +184,7 @@ async function handleExecute(socket: net.Socket, request: ExecuteRequest): Promi
         },
         {
           timeout: timeoutMs,
+          humanize: request.humanize,
         }
       );
 
@@ -208,13 +212,17 @@ async function handleInstall(socket: net.Socket, request: { id: string }): Promi
       await mkdir(BASE_DIR, { recursive: true });
       await writeFile(path.join(BASE_DIR, "package.json"), EMBEDDED_PACKAGE_JSON);
       await runPackageManagerCommand(output, request.id, ["install", "--ignore-scripts"], BASE_DIR);
-      // Install chromium as a fallback for environments without system Chrome
-      await runPackageManagerCommand(
-        output,
-        request.id,
-        ["exec", "patchright", "install", "chromium"],
-        BASE_DIR
-      );
+
+      if (!systemBrowserExists()) {
+        const mode = readMode();
+        const browserCli = mode === "assistant" ? "patchright" : "playwright";
+        await runPackageManagerCommand(
+          output,
+          request.id,
+          ["exec", browserCli, "install", "chromium"],
+          BASE_DIR
+        );
+      }
       await writeMessage(socket, {
         id: request.id,
         type: "complete",
@@ -334,6 +342,47 @@ async function runInstallCommand(
       : `${label} failed with exit code ${result.code ?? "unknown"}`;
 
   throw new Error(reason);
+}
+
+function systemBrowserPaths(): string[] {
+  const platform = os.platform();
+  const home = os.homedir();
+
+  if (platform === "darwin") {
+    return [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    ];
+  }
+
+  if (platform === "linux") {
+    return [
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/microsoft-edge",
+      "/usr/bin/microsoft-edge-stable",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/chromium",
+      "/snap/bin/chromium",
+    ];
+  }
+
+  if (platform === "win32") {
+    return [
+      path.win32.join(home, "AppData", "Local", "Google", "Chrome", "Application", "chrome.exe"),
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    ];
+  }
+
+  return [];
+}
+
+function systemBrowserExists(): boolean {
+  return systemBrowserPaths().some((p) => existsSync(p));
 }
 
 async function handleRequest(socket: net.Socket, line: string): Promise<void> {

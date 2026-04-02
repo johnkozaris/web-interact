@@ -275,9 +275,9 @@ export async function cdpType(
 
     // Clear existing text if requested — uses native value setter to work with React/Vue controlled inputs
     if (clearFirst) {
-      const { object } = await session.send("DOM.resolveNode", { backendNodeId });
+      const resolved = await session.send("DOM.resolveNode", { backendNodeId }) as { object: { objectId: string } };
       await session.send("Runtime.callFunctionOn", {
-        objectId: object.objectId,
+        objectId: resolved.object.objectId,
         functionDeclaration: `function() {
           const proto = this instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
           const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;

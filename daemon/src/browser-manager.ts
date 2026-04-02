@@ -1,11 +1,54 @@
 import "./patchright-workarounds.js";
 
+import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "patchright";
 
-import { getBrowsersDir } from "./local-endpoint.js";
+import { getBrowsersDir, readMode } from "./local-endpoint.js";
+
+/**
+ * Detect the best browser channel available on this system.
+ * Prefers real Chrome, falls back to Edge, then undefined (bundled Chromium).
+ */
+function detectBrowserChannel(): "chrome" | "msedge" | undefined {
+  const platform = os.platform();
+
+  const chromePaths: string[] =
+    platform === "darwin"
+      ? ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+      : platform === "linux"
+        ? ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable"]
+        : platform === "win32"
+          ? [
+              "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+              "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+            ]
+          : [];
+
+  if (chromePaths.some((p) => existsSync(p))) {
+    return "chrome";
+  }
+
+  const edgePaths: string[] =
+    platform === "darwin"
+      ? ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
+      : platform === "linux"
+        ? ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable"]
+        : platform === "win32"
+          ? [
+              "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+              "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+            ]
+          : [];
+
+  if (edgePaths.some((p) => existsSync(p))) {
+    return "msedge";
+  }
+
+  return undefined;
+}
 
 export interface DiscoverElement {
   backendNodeId: number;
@@ -49,6 +92,7 @@ type BrowserManagerDependencies = {
   mkdir: typeof mkdir;
   platform: NodeJS.Platform;
   readFile: typeof readFile;
+  readMode: () => "default" | "assistant";
 };
 
 type DebuggerWebSocketLookupResult =
@@ -102,6 +146,7 @@ export class BrowserManager {
       mkdir,
       platform: process.platform,
       readFile,
+      readMode,
       ...dependencies,
     };
   }
@@ -418,19 +463,29 @@ export class BrowserManager {
     const profileDir = path.join(this.baseDir, name, "browser-profile");
     await this.dependencies.mkdir(profileDir, { recursive: true });
 
-    const context = await this.dependencies.launchPersistentContext(profileDir, {
-      // Always use real Chrome — it's less detectable than Chromium and its new
-      // headless mode (Chrome 112+) behaves identically to headed mode.
-      channel: "chrome",
+    const channel = detectBrowserChannel();
+
+    const mode = this.dependencies.readMode();
+    const launchOptions: Record<string, unknown> = {
+      ...(channel ? { channel } : {}),
       headless,
-      // null viewport in headed mode lets the window size naturally;
-      // in headless mode we let Patchright use its default (1280x720).
       viewport: headless ? undefined : null,
       ignoreHTTPSErrors,
       handleSIGINT: false,
       handleSIGTERM: false,
       handleSIGHUP: false,
-    });
+    };
+
+    // Patchright-only: removes --enable-automation flag and
+    // disables AutomationControlled blink feature.
+    if (mode === "assistant") {
+      launchOptions.assistantMode = true;
+    }
+
+    const context = await this.dependencies.launchPersistentContext(
+      profileDir,
+      launchOptions as Parameters<typeof chromium.launchPersistentContext>[1]
+    );
     const browser = context.browser();
 
     if (!browser) {
@@ -583,6 +638,13 @@ export class BrowserManager {
             homeDir,
             "Library",
             "Application Support",
+            "Microsoft Edge",
+            "DevToolsActivePort"
+          ),
+          path.join(
+            homeDir,
+            "Library",
+            "Application Support",
             "Google",
             "Chrome Canary",
             "DevToolsActivePort"
@@ -600,6 +662,7 @@ export class BrowserManager {
       case "linux":
         return [
           path.join(homeDir, ".config", "google-chrome", "DevToolsActivePort"),
+          path.join(homeDir, ".config", "microsoft-edge", "DevToolsActivePort"),
           path.join(homeDir, ".config", "chromium", "DevToolsActivePort"),
           path.join(homeDir, ".config", "google-chrome-beta", "DevToolsActivePort"),
           path.join(homeDir, ".config", "google-chrome-unstable", "DevToolsActivePort"),
@@ -613,6 +676,15 @@ export class BrowserManager {
             "Local",
             "Google",
             "Chrome",
+            "User Data",
+            "DevToolsActivePort"
+          ),
+          path.join(
+            homeDir,
+            "AppData",
+            "Local",
+            "Microsoft",
+            "Edge",
             "User Data",
             "DevToolsActivePort"
           ),

@@ -1,5 +1,5 @@
 use crate::connection::connect_to_daemon;
-use crate::paths::{daemon_pid_path, web_interact_base_dir};
+use crate::paths::{daemon_pid_path, read_mode, web_interact_base_dir};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::env;
@@ -20,10 +20,8 @@ const PLAYWRIGHT_VERSION: &str = "1.59.1";
 const PATCHRIGHT_VERSION: &str = "1.59.1";
 const QUICKJS_VERSION: &str = "0.32.0";
 
-fn build_runtime_package_json() -> String {
-    let use_patchright = env::var("WEB_INTERACT_ENGINE")
-        .map(|v| v.eq_ignore_ascii_case("stealth"))
-        .unwrap_or(false);
+fn build_runtime_package_json(mode: &str) -> String {
+    let use_patchright = mode == "assistant";
 
     let (pkg, core, version) = if use_patchright {
         ("patchright", "patchright-core", PATCHRIGHT_VERSION)
@@ -161,7 +159,8 @@ pub fn ensure_daemon_extracted() -> Result<PathBuf, Box<dyn Error>> {
     let sandbox_client_path = base_dir.join("sandbox-client.js");
     sync_text_file(&daemon_path, EMBEDDED_DAEMON)?;
     sync_text_file(&sandbox_client_path, EMBEDDED_SANDBOX_CLIENT)?;
-    sync_text_file(&package_json_path, &build_runtime_package_json())?;
+    let mode = read_mode().unwrap_or_else(|_| "default".to_string());
+    sync_text_file(&package_json_path, &build_runtime_package_json(&mode))?;
 
     Ok(daemon_path)
 }
@@ -172,10 +171,8 @@ pub fn install_daemon_runtime() -> Result<(), Box<dyn Error>> {
     run_package_manager_command(&["install", "--ignore-scripts"], &base_dir)?;
 
     if !system_browser_exists() {
-        let use_patchright = env::var("WEB_INTERACT_ENGINE")
-            .map(|v| v.eq_ignore_ascii_case("patchright"))
-            .unwrap_or(false);
-        let browser_cli = if use_patchright { "patchright" } else { "playwright" };
+        let mode = read_mode().unwrap_or_else(|_| "default".to_string());
+        let browser_cli = if mode == "assistant" { "patchright" } else { "playwright" };
         eprintln!("No Chrome or Edge found — downloading Chromium as fallback...");
         run_package_manager_command(&["exec", browser_cli, "install", "chromium"], &base_dir)?;
     }
@@ -364,7 +361,8 @@ fn embedded_runtime_installed(base_dir: &Path) -> bool {
 }
 
 fn embedded_runtime_dependencies() -> Option<BTreeMap<String, String>> {
-    let package_json = build_runtime_package_json();
+    let mode = read_mode().unwrap_or_else(|_| "default".to_string());
+    let package_json = build_runtime_package_json(&mode);
     serde_json::from_str::<EmbeddedRuntimeManifest>(&package_json)
         .ok()
         .map(|manifest| manifest.dependencies)

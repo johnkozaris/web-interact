@@ -63,6 +63,7 @@ import path3 from "node:path";
 import { chromium } from "patchright";
 
 // src/local-endpoint.ts
+import { readFileSync } from "node:fs";
 import os from "node:os";
 import path2 from "node:path";
 var WEB_INTERACT_HOME_ENV = "WEB_INTERACT_HOME";
@@ -108,6 +109,14 @@ function getBrowsersDir(homedir = os.homedir()) {
 }
 function requiresDaemonEndpointCleanup(platform = process.platform) {
   return platform !== "win32";
+}
+function readMode(homedir = os.homedir()) {
+  try {
+    const content = readFileSync(path2.join(getWebInteractBaseDir(homedir), "mode"), "utf8").trim();
+    return content === "assistant" ? "assistant" : "default";
+  } catch {
+    return "default";
+  }
 }
 
 // src/browser-manager.ts
@@ -162,6 +171,7 @@ var BrowserManager = class {
       mkdir,
       platform: process.platform,
       readFile,
+      readMode,
       ...dependencies
     };
   }
@@ -389,19 +399,23 @@ var BrowserManager = class {
     const profileDir = path3.join(this.baseDir, name, "browser-profile");
     await this.dependencies.mkdir(profileDir, { recursive: true });
     const channel = detectBrowserChannel();
-    const context = await this.dependencies.launchPersistentContext(profileDir, {
-      // Prefer real Chrome, fall back to Edge, then the bundled Chromium.
-      // The channel is auto-detected from installed browsers.
+    const mode = this.dependencies.readMode();
+    const launchOptions = {
       ...channel ? { channel } : {},
       headless,
-      // null viewport in headed mode lets the window size naturally;
-      // in headless mode we let Patchright use its default (1280x720).
       viewport: headless ? void 0 : null,
       ignoreHTTPSErrors,
       handleSIGINT: false,
       handleSIGTERM: false,
       handleSIGHUP: false
-    });
+    };
+    if (mode === "assistant") {
+      launchOptions.assistantMode = true;
+    }
+    const context = await this.dependencies.launchPersistentContext(
+      profileDir,
+      launchOptions
+    );
     const browser = context.browser();
     if (!browser) {
       await context.close();
@@ -15862,9 +15876,9 @@ async function cdpType(session, backendNodeId, text, options) {
     await scrollIntoView(session, backendNodeId);
     await cdpFocus(session, backendNodeId);
     if (clearFirst) {
-      const { object: object2 } = await session.send("DOM.resolveNode", { backendNodeId });
+      const resolved = await session.send("DOM.resolveNode", { backendNodeId });
       await session.send("Runtime.callFunctionOn", {
-        objectId: object2.objectId,
+        objectId: resolved.object.objectId,
         functionDeclaration: `function() {
           const proto = this instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
           const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
@@ -16281,7 +16295,7 @@ var CHECK_ELEMENT_SCRIPT = `
 `;
 
 // src/temp-files.ts
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync as readFileSync2 } from "node:fs";
 import { lstat, mkdir as mkdir2, open, unlink } from "node:fs/promises";
 import path4 from "node:path";
 var SAFE_PATH_SEGMENT_PATTERN = /[^A-Za-z0-9._-]/g;
@@ -16521,7 +16535,7 @@ function readWebInteractTempFileSync(fileName) {
   let descriptor;
   try {
     descriptor = openSync(destinationPath, constants.O_RDONLY | NOFOLLOW_FLAG);
-    return readFileSync(descriptor, {
+    return readFileSync2(descriptor, {
       encoding: "utf8"
     });
   } catch (error48) {
@@ -18570,8 +18584,8 @@ async function handleInstall(socket, request) {
       await writeFile(path7.join(BASE_DIR, "package.json"), EMBEDDED_PACKAGE_JSON);
       await runPackageManagerCommand(output, request.id, ["install", "--ignore-scripts"], BASE_DIR);
       if (!systemBrowserExists()) {
-        const usePatchright = process.env.WEB_INTERACT_ENGINE?.toLowerCase() === "patchright";
-        const browserCli = usePatchright ? "patchright" : "playwright";
+        const mode = readMode();
+        const browserCli = mode === "assistant" ? "patchright" : "playwright";
         await runPackageManagerCommand(
           output,
           request.id,

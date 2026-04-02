@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -67,4 +68,13 @@ export function getBrowsersDir(homedir = os.homedir()): string {
 
 export function requiresDaemonEndpointCleanup(platform = process.platform): boolean {
   return platform !== "win32";
+}
+
+export function readMode(homedir = os.homedir()): "default" | "assistant" {
+  try {
+    const content = readFileSync(path.join(getWebInteractBaseDir(homedir), "mode"), "utf8").trim();
+    return content === "assistant" ? "assistant" : "default";
+  } catch {
+    return "default";
+  }
 }

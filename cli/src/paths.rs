@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::io;
 use std::path::PathBuf;
 
@@ -46,6 +47,24 @@ pub fn web_interact_base_dir() -> io::Result<PathBuf> {
             ),
         )
     })
+}
+
+pub fn read_mode() -> io::Result<String> {
+    let path = web_interact_base_dir()?.join("mode");
+    match fs::read_to_string(&path) {
+        Ok(content) => {
+            let mode = content.trim().to_lowercase();
+            if mode == "assistant" { Ok("assistant".to_string()) } else { Ok("default".to_string()) }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok("default".to_string()),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn write_mode(mode: &str) -> io::Result<()> {
+    let base = web_interact_base_dir()?;
+    fs::create_dir_all(&base)?;
+    fs::write(base.join("mode"), format!("{mode}\n"))
 }
 
 pub fn daemon_pid_path() -> io::Result<PathBuf> {
