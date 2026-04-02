@@ -16,17 +16,49 @@ use std::time::{Duration, Instant};
 
 const EMBEDDED_DAEMON: &str = include_str!("../../daemon/dist/daemon.bundle.mjs");
 const EMBEDDED_SANDBOX_CLIENT: &str = include_str!("../../daemon/dist/sandbox-client.js");
-const EMBEDDED_PACKAGE_JSON: &str = r#"{
+const PLAYWRIGHT_VERSION: &str = "1.59.1";
+const PATCHRIGHT_VERSION: &str = "1.59.1";
+const QUICKJS_VERSION: &str = "0.32.0";
+
+fn build_runtime_package_json() -> String {
+    let use_patchright = env::var("WEB_INTERACT_ENGINE")
+        .map(|v| v.eq_ignore_ascii_case("stealth"))
+        .unwrap_or(false);
+
+    let (pkg, core, version) = if use_patchright {
+        ("patchright", "patchright-core", PATCHRIGHT_VERSION)
+    } else {
+        // npm alias: install playwright under the "patchright" name so the
+        // daemon bundle's `import from "patchright"` resolves correctly.
+        return format!(
+            r#"{{
   "name": "web-interact-runtime",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.33.0",
-  "dependencies": {
-    "patchright": "1.59.1",
-    "patchright-core": "1.59.1",
-    "quickjs-emscripten": "0.32.0"
-  }
-}"#;
+  "dependencies": {{
+    "patchright": "npm:playwright@{PLAYWRIGHT_VERSION}",
+    "patchright-core": "npm:playwright-core@{PLAYWRIGHT_VERSION}",
+    "quickjs-emscripten": "{QUICKJS_VERSION}"
+  }}
+}}"#
+        );
+    };
+
+    format!(
+        r#"{{
+  "name": "web-interact-runtime",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "dependencies": {{
+    "{pkg}": "{version}",
+    "{core}": "{version}",
+    "quickjs-emscripten": "{QUICKJS_VERSION}"
+  }}
+}}"#
+    )
+}
 
 #[derive(Deserialize)]
 struct EmbeddedRuntimeManifest {
@@ -129,7 +161,7 @@ pub fn ensure_daemon_extracted() -> Result<PathBuf, Box<dyn Error>> {
     let sandbox_client_path = base_dir.join("sandbox-client.js");
     sync_text_file(&daemon_path, EMBEDDED_DAEMON)?;
     sync_text_file(&sandbox_client_path, EMBEDDED_SANDBOX_CLIENT)?;
-    sync_text_file(&package_json_path, EMBEDDED_PACKAGE_JSON)?;
+    sync_text_file(&package_json_path, &build_runtime_package_json())?;
 
     Ok(daemon_path)
 }
@@ -138,8 +170,64 @@ pub fn install_daemon_runtime() -> Result<(), Box<dyn Error>> {
     let base_dir = daemon_base_dir()?;
     ensure_daemon_extracted()?;
     run_package_manager_command(&["install", "--ignore-scripts"], &base_dir)?;
-    run_package_manager_command(&["exec", "patchright", "install", "chromium"], &base_dir)?;
+
+    if !system_browser_exists() {
+        let use_patchright = env::var("WEB_INTERACT_ENGINE")
+            .map(|v| v.eq_ignore_ascii_case("patchright"))
+            .unwrap_or(false);
+        let browser_cli = if use_patchright { "patchright" } else { "playwright" };
+        eprintln!("No Chrome or Edge found — downloading Chromium as fallback...");
+        run_package_manager_command(&["exec", browser_cli, "install", "chromium"], &base_dir)?;
+    }
+
     Ok(())
+}
+
+/// Returns true if a usable Chrome or Edge binary exists on this system.
+fn system_browser_exists() -> bool {
+    for path in system_browser_paths() {
+        if Path::new(path).exists() {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn system_browser_paths() -> &'static [&'static str] {
+    &[
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    ]
+}
+
+#[cfg(target_os = "linux")]
+fn system_browser_paths() -> &'static [&'static str] {
+    &[
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/microsoft-edge",
+        "/usr/bin/microsoft-edge-stable",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+        "/snap/bin/chromium",
+    ]
+}
+
+#[cfg(target_os = "windows")]
+fn system_browser_paths() -> &'static [&'static str] {
+    &[
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    ]
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn system_browser_paths() -> &'static [&'static str] {
+    &[]
 }
 
 pub fn is_daemon_running() -> bool {
@@ -276,7 +364,8 @@ fn embedded_runtime_installed(base_dir: &Path) -> bool {
 }
 
 fn embedded_runtime_dependencies() -> Option<BTreeMap<String, String>> {
-    serde_json::from_str::<EmbeddedRuntimeManifest>(EMBEDDED_PACKAGE_JSON)
+    let package_json = build_runtime_package_json();
+    serde_json::from_str::<EmbeddedRuntimeManifest>(&package_json)
         .ok()
         .map(|manifest| manifest.dependencies)
 }
@@ -296,7 +385,15 @@ fn dependency_installed(base_dir: &Path, package_name: &str, expected_version: &
         Err(_) => return false,
     };
 
-    installed_manifest.version == expected_version
+    // npm aliases: "patchright": "npm:playwright@1.52.0" installs playwright
+    // under node_modules/patchright, so check the aliased version too.
+    let expected = if expected_version.starts_with("npm:") {
+        expected_version.rsplit_once('@').map_or(expected_version, |(_, v)| v)
+    } else {
+        expected_version
+    };
+
+    installed_manifest.version == expected
 }
 
 fn run_package_manager_command(args: &[&str], current_dir: &Path) -> Result<(), Box<dyn Error>> {

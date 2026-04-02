@@ -6,8 +6,10 @@ var __export = (target, all) => {
 
 // src/daemon.ts
 import { spawn } from "node:child_process";
+import { existsSync as existsSync5 } from "node:fs";
 import { mkdir as mkdir3, unlink as unlink2, writeFile } from "node:fs/promises";
 import net from "node:net";
+import os3 from "node:os";
 import path7 from "node:path";
 
 // src/patchright-workarounds.ts
@@ -54,6 +56,7 @@ function resolvePatchrightInternal(modulePath) {
 applyPatchrightRuntimeEnableWorkaround();
 
 // src/browser-manager.ts
+import { existsSync as existsSync2 } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import os2 from "node:os";
 import path3 from "node:path";
@@ -108,6 +111,24 @@ function requiresDaemonEndpointCleanup(platform = process.platform) {
 }
 
 // src/browser-manager.ts
+function detectBrowserChannel() {
+  const platform = os2.platform();
+  const chromePaths = platform === "darwin" ? ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"] : platform === "linux" ? ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable"] : platform === "win32" ? [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
+  ] : [];
+  if (chromePaths.some((p) => existsSync2(p))) {
+    return "chrome";
+  }
+  const edgePaths = platform === "darwin" ? ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"] : platform === "linux" ? ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable"] : platform === "win32" ? [
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+  ] : [];
+  if (edgePaths.some((p) => existsSync2(p))) {
+    return "msedge";
+  }
+  return void 0;
+}
 var DISCOVERY_PORTS = [9222, 9223, 9224, 9225, 9226, 9227, 9228, 9229];
 var PROBE_TIMEOUT_MS = 750;
 var MANUAL_CONNECT_TIMEOUT_MS = 5e3;
@@ -367,10 +388,11 @@ var BrowserManager = class {
   async launchBrowser(name, headless, ignoreHTTPSErrors) {
     const profileDir = path3.join(this.baseDir, name, "browser-profile");
     await this.dependencies.mkdir(profileDir, { recursive: true });
+    const channel = detectBrowserChannel();
     const context = await this.dependencies.launchPersistentContext(profileDir, {
-      // Always use real Chrome — it's less detectable than Chromium and its new
-      // headless mode (Chrome 112+) behaves identically to headed mode.
-      channel: "chrome",
+      // Prefer real Chrome, fall back to Edge, then the bundled Chromium.
+      // The channel is auto-detected from installed browsers.
+      ...channel ? { channel } : {},
       headless,
       // null viewport in headed mode lets the window size naturally;
       // in headless mode we let Patchright use its default (1280x720).
@@ -503,6 +525,13 @@ var BrowserManager = class {
             homeDir,
             "Library",
             "Application Support",
+            "Microsoft Edge",
+            "DevToolsActivePort"
+          ),
+          path3.join(
+            homeDir,
+            "Library",
+            "Application Support",
             "Google",
             "Chrome Canary",
             "DevToolsActivePort"
@@ -520,6 +549,7 @@ var BrowserManager = class {
       case "linux":
         return [
           path3.join(homeDir, ".config", "google-chrome", "DevToolsActivePort"),
+          path3.join(homeDir, ".config", "microsoft-edge", "DevToolsActivePort"),
           path3.join(homeDir, ".config", "chromium", "DevToolsActivePort"),
           path3.join(homeDir, ".config", "google-chrome-beta", "DevToolsActivePort"),
           path3.join(homeDir, ".config", "google-chrome-unstable", "DevToolsActivePort"),
@@ -533,6 +563,15 @@ var BrowserManager = class {
             "Local",
             "Google",
             "Chrome",
+            "User Data",
+            "DevToolsActivePort"
+          ),
+          path3.join(
+            homeDir,
+            "AppData",
+            "Local",
+            "Microsoft",
+            "Edge",
             "User Data",
             "DevToolsActivePort"
           ),
@@ -14584,7 +14623,8 @@ var ExecuteRequestSchema = RequestBaseSchema.extend({
   headless: external_exports.boolean().optional(),
   ignoreHTTPSErrors: external_exports.boolean().optional(),
   connect: external_exports.string().min(1).optional(),
-  timeoutMs: external_exports.number().int().positive().optional()
+  timeoutMs: external_exports.number().int().positive().optional(),
+  humanize: external_exports.boolean().optional()
 });
 var BrowsersRequestSchema = RequestBaseSchema.extend({
   type: external_exports.literal("browsers")
@@ -14682,7 +14722,7 @@ function serialize(message) {
 }
 
 // src/sandbox/quickjs-sandbox.ts
-import { existsSync as existsSync3 } from "node:fs";
+import { existsSync as existsSync4 } from "node:fs";
 import { readFile as readFileFs } from "node:fs/promises";
 import path6 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -16519,7 +16559,7 @@ async function deleteWebInteractTempFile(fileName) {
 }
 
 // src/sandbox/playwright-internals.ts
-import { existsSync as existsSync2 } from "node:fs";
+import { existsSync as existsSync3 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import path5 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
@@ -16532,7 +16572,7 @@ function resolvePlaywrightInternal(modulePath) {
     path5.resolve(process.cwd(), "node_modules/patchright-core", modulePath)
   ];
   for (const candidate of candidates) {
-    if (existsSync2(candidate)) {
+    if (existsSync3(candidate)) {
       return candidate;
     }
   }
@@ -17145,7 +17185,7 @@ function findBundlePath() {
     fileURLToPath3(new URL("../../dist/sandbox-client.js", import.meta.url))
   ];
   for (const p of candidates) {
-    if (existsSync3(p)) return p;
+    if (existsSync4(p)) return p;
   }
   throw new Error(
     `Failed to find sandbox-client.js. Searched:
@@ -17320,6 +17360,10 @@ function decodeSandboxFilePayload(value, label) {
     return data;
   }
   return Buffer.from(data, "base64");
+}
+function humanDelay(minMs, maxMs) {
+  const ms = minMs + Math.floor(Math.random() * (maxMs - minMs));
+  return new Promise((r) => setTimeout(r, ms));
 }
 var QuickJSSandbox = class {
   #options;
@@ -18150,6 +18194,9 @@ return __PlaywrightClient;`);
       name: el.name ? el.name.substring(0, 60) : void 0
     };
     if (action === "click") {
+      if (this.#options.humanize) {
+        await humanDelay(80, 400);
+      }
       const urlBefore = page.url();
       const session = await page.context().newCDPSession(page);
       try {
@@ -18181,12 +18228,15 @@ return __PlaywrightClient;`);
           element: elContext
         });
       }
+      if (this.#options.humanize) {
+        await humanDelay(60, 250);
+      }
       const session = await page.context().newCDPSession(page);
       try {
         await session.send("DOM.enable");
         const result = await cdpType(session, el.backendNodeId, text, {
           clearFirst: opts.clearFirst,
-          delay: opts.delay
+          delay: this.#options.humanize ? 30 + Math.floor(Math.random() * 90) : opts.delay
         });
         return JSON.stringify({ ...result, element: elContext });
       } finally {
@@ -18195,6 +18245,9 @@ return __PlaywrightClient;`);
       }
     }
     if (action === "select") {
+      if (this.#options.humanize) {
+        await humanDelay(80, 350);
+      }
       if (el.tag !== "select" && el.role !== "listbox" && el.role !== "combobox") {
         return JSON.stringify({
           success: false,
@@ -18208,6 +18261,9 @@ return __PlaywrightClient;`);
       return JSON.stringify({ ...result, element: elContext });
     }
     if (action === "check") {
+      if (this.#options.humanize) {
+        await humanDelay(80, 350);
+      }
       if (el.tag !== "input" && el.role !== "checkbox" && el.role !== "radio" && el.role !== "switch") {
         return JSON.stringify({
           success: false,
@@ -18333,7 +18389,8 @@ async function runScript(script, manager2, browserName, output, options = {}) {
     onStdout: output.onStdout,
     onStderr: output.onStderr,
     memoryLimitBytes: options.memoryLimitBytes,
-    timeoutMs: options.timeout
+    timeoutMs: options.timeout,
+    humanize: options.humanize ?? false
   });
   try {
     await sandbox.initialize();
@@ -18485,7 +18542,8 @@ async function handleExecute(socket, request) {
           }
         },
         {
-          timeout: timeoutMs
+          timeout: timeoutMs,
+          humanize: request.humanize
         }
       );
       await output.drain();
@@ -18511,12 +18569,16 @@ async function handleInstall(socket, request) {
       await mkdir3(BASE_DIR, { recursive: true });
       await writeFile(path7.join(BASE_DIR, "package.json"), EMBEDDED_PACKAGE_JSON);
       await runPackageManagerCommand(output, request.id, ["install", "--ignore-scripts"], BASE_DIR);
-      await runPackageManagerCommand(
-        output,
-        request.id,
-        ["exec", "patchright", "install", "chromium"],
-        BASE_DIR
-      );
+      if (!systemBrowserExists()) {
+        const usePatchright = process.env.WEB_INTERACT_ENGINE?.toLowerCase() === "patchright";
+        const browserCli = usePatchright ? "patchright" : "playwright";
+        await runPackageManagerCommand(
+          output,
+          request.id,
+          ["exec", browserCli, "install", "chromium"],
+          BASE_DIR
+        );
+      }
       await writeMessage(socket, {
         id: request.id,
         type: "complete",
@@ -18607,6 +18669,41 @@ async function runInstallCommand(output, requestId, program, args, cwd, label) {
   }
   const reason = result.signal !== null ? `${label} terminated by signal ${result.signal}` : `${label} failed with exit code ${result.code ?? "unknown"}`;
   throw new Error(reason);
+}
+function systemBrowserPaths() {
+  const platform = os3.platform();
+  const home = os3.homedir();
+  if (platform === "darwin") {
+    return [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
+    ];
+  }
+  if (platform === "linux") {
+    return [
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/microsoft-edge",
+      "/usr/bin/microsoft-edge-stable",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/chromium",
+      "/snap/bin/chromium"
+    ];
+  }
+  if (platform === "win32") {
+    return [
+      path7.win32.join(home, "AppData", "Local", "Google", "Chrome", "Application", "chrome.exe"),
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    ];
+  }
+  return [];
+}
+function systemBrowserExists() {
+  return systemBrowserPaths().some((p) => existsSync5(p));
 }
 async function handleRequest(socket, line) {
   const parsed = parseRequest(line);
