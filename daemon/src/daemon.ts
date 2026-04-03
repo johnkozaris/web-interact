@@ -24,21 +24,29 @@ const PID_PATH = getPidPath();
 const BROWSERS_DIR = getBrowsersDir();
 const DEFAULT_SCRIPT_TIMEOUT_MS = 20_000;
 const SOCKET_CLOSE_TIMEOUT_MS = 500;
-const EMBEDDED_PACKAGE_JSON = JSON.stringify(
-  {
-    name: "web-interact-runtime",
-    private: true,
-    type: "module",
-    packageManager: "pnpm@10.33.0",
-    dependencies: {
-      patchright: "1.59.1",
-      "patchright-core": "1.59.1",
-      "quickjs-emscripten": "0.32.0",
+const PLAYWRIGHT_VERSION = "1.59.1";
+const PATCHRIGHT_VERSION = "1.59.1";
+const QUICKJS_VERSION = "0.32.0";
+
+function buildRuntimePackageJson(): string {
+  const mode = readMode();
+  const deps =
+    mode === "assistant"
+      ? { patchright: PATCHRIGHT_VERSION, "patchright-core": PATCHRIGHT_VERSION }
+      : { patchright: `npm:playwright@${PLAYWRIGHT_VERSION}`, "patchright-core": `npm:playwright-core@${PLAYWRIGHT_VERSION}` };
+
+  return JSON.stringify(
+    {
+      name: "web-interact-runtime",
+      private: true,
+      type: "module",
+      packageManager: "pnpm@10.33.0",
+      dependencies: { ...deps, "quickjs-emscripten": QUICKJS_VERSION },
     },
-  },
-  null,
-  2
-);
+    null,
+    2
+  );
+}
 
 type PackageManagerCommand = {
   program: string;
@@ -210,7 +218,7 @@ async function handleInstall(socket: net.Socket, request: { id: string }): Promi
     const output = createMessageQueue(socket);
     try {
       await mkdir(BASE_DIR, { recursive: true });
-      await writeFile(path.join(BASE_DIR, "package.json"), EMBEDDED_PACKAGE_JSON);
+      await writeFile(path.join(BASE_DIR, "package.json"), buildRuntimePackageJson());
       await runPackageManagerCommand(output, request.id, ["install", "--ignore-scripts"], BASE_DIR);
 
       if (!systemBrowserExists()) {

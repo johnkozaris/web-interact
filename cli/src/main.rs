@@ -231,12 +231,20 @@ fn run() -> Result<i32, Box<dyn Error>> {
                         }
                     }
 
-                    // Nuke ~/.web-interact/ and write fresh mode file
+                    // Preserve browser-mode across engine switch
+                    let saved_browser_mode = paths::read_browser_mode().ok();
+
+                    // Nuke ~/.web-interact/ and write fresh config
                     let base_dir = paths::web_interact_base_dir()?;
                     if base_dir.exists() {
                         fs::remove_dir_all(&base_dir)?;
                     }
                     paths::write_mode(&new_mode)?;
+                    if let Some(bm) = saved_browser_mode {
+                        if bm != "auto" {
+                            paths::write_browser_mode(&bm)?;
+                        }
+                    }
 
                     let engine = if new_mode == "assistant" { "Patchright" } else { "Playwright" };
                     println!("Switched to {new_mode} mode ({engine}).");

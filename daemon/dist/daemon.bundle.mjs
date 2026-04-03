@@ -18424,21 +18424,24 @@ var PID_PATH = getPidPath();
 var BROWSERS_DIR = getBrowsersDir();
 var DEFAULT_SCRIPT_TIMEOUT_MS = 2e4;
 var SOCKET_CLOSE_TIMEOUT_MS = 500;
-var EMBEDDED_PACKAGE_JSON = JSON.stringify(
-  {
-    name: "web-interact-runtime",
-    private: true,
-    type: "module",
-    packageManager: "pnpm@10.33.0",
-    dependencies: {
-      patchright: "1.59.1",
-      "patchright-core": "1.59.1",
-      "quickjs-emscripten": "0.32.0"
-    }
-  },
-  null,
-  2
-);
+var PLAYWRIGHT_VERSION = "1.59.1";
+var PATCHRIGHT_VERSION = "1.59.1";
+var QUICKJS_VERSION = "0.32.0";
+function buildRuntimePackageJson() {
+  const mode = readMode();
+  const deps = mode === "assistant" ? { patchright: PATCHRIGHT_VERSION, "patchright-core": PATCHRIGHT_VERSION } : { patchright: `npm:playwright@${PLAYWRIGHT_VERSION}`, "patchright-core": `npm:playwright-core@${PLAYWRIGHT_VERSION}` };
+  return JSON.stringify(
+    {
+      name: "web-interact-runtime",
+      private: true,
+      type: "module",
+      packageManager: "pnpm@10.33.0",
+      dependencies: { ...deps, "quickjs-emscripten": QUICKJS_VERSION }
+    },
+    null,
+    2
+  );
+}
 var manager = new BrowserManager(BROWSERS_DIR);
 var startedAt = Date.now();
 var withBrowserLock = createKeyedLock();
@@ -18582,7 +18585,7 @@ async function handleInstall(socket, request) {
     const output = createMessageQueue(socket);
     try {
       await mkdir3(BASE_DIR, { recursive: true });
-      await writeFile(path7.join(BASE_DIR, "package.json"), EMBEDDED_PACKAGE_JSON);
+      await writeFile(path7.join(BASE_DIR, "package.json"), buildRuntimePackageJson());
       await runPackageManagerCommand(output, request.id, ["install", "--ignore-scripts"], BASE_DIR);
       if (!systemBrowserExists()) {
         const mode = readMode();
