@@ -5,22 +5,10 @@ use std::path::Path;
 use std::process::Command;
 
 const PLUGIN_REPO: &str = "https://github.com/johnkozaris/web-interact-plugin.git";
-const PLUGIN_SKILL_PATH: &str = "skills/web-interact";
-
-struct InstallTarget {
-    label: &'static str,
-    relative_path: &'static str,
-}
-
-const INSTALL_TARGETS: [InstallTarget; 2] = [
-    InstallTarget {
-        label: "~/.claude/skills/web-interact",
-        relative_path: ".claude/skills/web-interact",
-    },
-    InstallTarget {
-        label: "~/.agents/skills/web-interact",
-        relative_path: ".agents/skills/web-interact",
-    },
+const PLUGIN_SKILL_PATHS: [&str; 2] = ["skills/web-interact", "skills/mode"];
+const INSTALL_ROOTS: [(&str, &str); 2] = [
+    ("~/.claude/skills", ".claude/skills"),
+    ("~/.agents/skills", ".agents/skills"),
 ];
 
 pub fn install_skill() -> Result<(), Box<dyn Error>> {
@@ -52,21 +40,21 @@ pub fn install_skill() -> Result<(), Box<dyn Error>> {
         return Err(format!("Failed to clone {PLUGIN_REPO}").into());
     }
 
-    let source_skill_dir = clone_path.join(PLUGIN_SKILL_PATH);
-    if !source_skill_dir.exists() {
-        return Err(format!("Skill not found in cloned repo at {PLUGIN_SKILL_PATH}").into());
-    }
-
-    // Install to each target
-    for target in &INSTALL_TARGETS {
-        let dest = home_dir.join(target.relative_path);
-        
-        if dest.exists() {
-            fs::remove_dir_all(&dest)?;
+    for skill_path in &PLUGIN_SKILL_PATHS {
+        let source_dir = clone_path.join(skill_path);
+        if !source_dir.exists() {
+            eprintln!("Skipping {skill_path} (not found in repo)");
+            continue;
         }
-        
-        copy_dir_recursive(&source_skill_dir, &dest)?;
-        println!("Installed to {}", target.label);
+        let skill_name = Path::new(skill_path).file_name().unwrap().to_str().unwrap();
+        for (label_root, relative_root) in &INSTALL_ROOTS {
+            let dest = home_dir.join(relative_root).join(skill_name);
+            if dest.exists() {
+                fs::remove_dir_all(&dest)?;
+            }
+            copy_dir_recursive(&source_dir, &dest)?;
+            println!("Installed to {label_root}/{skill_name}");
+        }
     }
 
     println!();
