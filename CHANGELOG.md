@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 (2026-04-03)
+
+### Bug Fixes
+- **click-to-fix**: command timed out after 8s instead of 120s, making it unusable — user had no time to inspect and click an element before the command silently died. Fixed by passing timeout as third argument to `waitForFunction` (Playwright API: `predicate, arg, options`).
+
 ## 0.2.0 (2026-04-03)
 
 ### Features
