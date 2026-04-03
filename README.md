@@ -48,7 +48,7 @@ If you use Claude Code, add the plugin for seamless integration:
 /plugin marketplace add johnkozaris/web-interact-plugin
 ```
 
-Claude gets `/web-interact`, `/mode`, and `/browser-mode` skills — it knows when and how to use the CLI automatically.
+Claude gets `/web-interact`, `/click-to-fix`, `/mode`, and `/browser-mode` skills — it knows when and how to use the CLI automatically.
 
 ---
 
