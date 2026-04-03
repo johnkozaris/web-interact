@@ -1,6 +1,6 @@
 {
   "name": "web-interact-daemon",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Node.js daemon for web-interact: QuickJS sandbox, Patchright browser control, CDP element discovery",
   "author": {

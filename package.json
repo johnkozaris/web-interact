@@ -1,6 +1,6 @@
 {
   "name": "web-interact",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Browser automation CLI for AI agents with CDP-based element discovery",
   "type": "module",

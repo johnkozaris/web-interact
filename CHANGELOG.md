@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 (2026-04-03)
+
+### Features
+- **click-to-fix**: click any browser element to trace it to source code (React/Vue/Svelte/Angular)
+- **Mode switching**: `web-interact mode default|assistant` — Playwright or Patchright engine
+- **Browser mode**: `web-interact browser-mode auto|real|sandbox` — connection strategy
+- **--humanize**: natural human-like delays between actions (auto in assistant mode)
+- **--own-browser**: connect to your running Chrome/Edge (shorthand for --connect auto)
+- **Edge support**: auto-detects Microsoft Edge alongside Chrome
+- **fill fix**: properly clears React/Vue controlled inputs via native value setter
+- **type fix**: correctly appends (no longer clears by default)
+
+### Infrastructure
+- CI pipeline (typecheck + test + build) with badge
+- npm Trusted Publishing via OIDC (no tokens)
+- CODEOWNERS for PR reviews
+- Branch protection on main
+
 ## 0.1.0 (2026-04-01)
 
 Initial open-source release.
@@ -8,7 +26,7 @@ Initial open-source release.
 - 40+ CLI commands for browser automation
 - DOM mode: discover interactive elements, act by index
 - Vision mode: --vision (plain screenshot), --vision --annotate (numbered overlays)
-- Real Chrome via Patchright (Playwright fork)
+- Playwright-based browser automation
 - Silent output contract: actions silent on success, getters print raw values
 - Auto-install runtime on first run (~/.web-interact/)
 - Live element indices: auto-refresh on page navigation
@@ -20,4 +38,3 @@ Initial open-source release.
 ### Architecture
 - Rust CLI (edition 2024) + Node.js daemon + QuickJS WASM sandbox
 - CDP-based element discovery (AX tree + DOMSnapshot + JS listeners)
-- Patchright 1.59.1 (Playwright fork)
