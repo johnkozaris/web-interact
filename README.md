@@ -1,43 +1,61 @@
 # web-interact
 
-Browser automation CLI for AI agents and scripts. Each shell command maps to one browser action — navigate, discover elements, click, fill forms, take screenshots, extract data.
+<!-- TODO: Add banner image -->
 
-Uses real Chrome via Patchright (Playwright fork). Actions are silent on success. Errors are plain text. Output never floods the agent's context window. Designed for automating your own web applications — please use responsibly.
+Browser automation CLI for AI agents. Each command maps to one browser action — navigate, discover elements, click, fill forms, take screenshots, extract data.
 
-## Usage
+Designed for automating your own web applications. Please use responsibly.
+
+[![npm](https://img.shields.io/npm/v/web-interact)](https://www.npmjs.com/package/web-interact)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+## Install
+
+```bash
+# npm (recommended)
+npm install -g web-interact
+
+# Shell installer (macOS/Linux)
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/johnkozaris/web-interact/releases/latest/download/web-interact-installer.sh | sh
+
+# PowerShell (Windows)
+powershell -ExecutionPolicy ByPass -c "irm https://github.com/johnkozaris/web-interact/releases/latest/download/web-interact-installer.ps1 | iex"
+
+# Cargo
+cargo install web-interact
+```
+
+Runtime dependencies (Playwright + Chrome) are auto-installed on first run.
+
+## Quick start
 
 ```bash
 # Navigate and discover interactive elements
-web-interact --headless open "https://example.com/login"
-web-interact --headless discover
+web-interact open "https://example.com/login"
+web-interact discover
 # [1] input "Email"  [2] input[password] "Password"  [3] button "Sign in"
 
 # Fill the form and submit
-web-interact --headless fill 1 "user@example.com"
-web-interact --headless fill 2 "password123"
-web-interact --headless click 3
+web-interact fill 1 "user@example.com"
+web-interact fill 2 "password123"
+web-interact click 3
 
 # Check where we landed
-web-interact --headless get url
+web-interact get url
 # https://example.com/dashboard
 ```
 
-Element indices auto-refresh when the page navigates.
+## How it works
 
-## Modes
+**Discover → Act → Verify.** Each command is one shell call. Element indices auto-refresh on navigation.
 
 ```bash
-# DOM mode (default) — discover elements, act by index
-web-interact --headless discover
-web-interact --headless click 3
-
-# Vision mode — plain screenshot after each command
-web-interact --headless --vision click 3
-# stderr: vision:/path/to/screenshot.png
-
-# Annotated vision — element numbers overlaid on screenshot
-web-interact --headless --vision --annotate click 3
-# stderr: vision:/path/to/annotated.png
+web-interact discover              # list interactive elements [1], [2], ...
+web-interact click 3               # click by index
+web-interact fill 1 "text"         # clear + type into field
+web-interact type 2 "text"         # append to field (for autocomplete)
+web-interact get url               # read page state
+web-interact screenshot --annotate # screenshot with numbered overlays
 ```
 
 ## Commands
@@ -57,67 +75,68 @@ web-interact --headless --vision --annotate click 3
 | Settings | `set viewport/geo/offline/media/headers` |
 | Low-level | `mouse move/click/down/up/wheel`, `keyboard type/insert/press/down/up` |
 | Console | `console` (JS errors, warnings, logs) |
-| Browser | `status`, `browsers`, `close`, `stop`, `install` |
+| Config | `mode default/assistant`, `browser-mode auto/real/sandbox` |
+| Manage | `status`, `browsers`, `close`, `stop`, `install` |
 
 ## Output contract
 
-- **Actions** (click, fill, press, etc.): silent on success (exit 0). Error text on stderr (exit 1).
-- **Getters** (get url, eval, etc.): raw value to stdout.
-- **Data** (tab list, cookies, storage): JSON to stdout.
-- **Large output**: truncated at 128KB. Use `--save <file>` for full output.
+- **Actions** (click, fill, press, etc.): silent on success (exit 0), error on stderr (exit 1)
+- **Getters** (get url, eval, etc.): raw value to stdout
+- **Data** (tab list, cookies, storage): JSON to stdout
+- **Large output**: truncated at 128KB — use `--save <file>` for full
 
-## Architecture
+## Modes
 
-```
-cli/         Rust CLI source (edition 2024)
-daemon/      Node.js daemon source (Patchright + QuickJS WASM sandbox)
-npm/         npm distribution packages (platform stubs, no binaries in git)
-scripts/     Build, publish, and dev helper scripts
-```
-
-The Rust CLI embeds the daemon bundle at compile time and extracts it to `~/.web-interact/` on first run. Runtime dependencies (Patchright + Chrome) are auto-installed on first use.
-
-## Install
-
+### Interaction modes
 ```bash
-./setup.sh                  # Build from source + install runtime
+web-interact discover                          # DOM mode (default)
+web-interact --vision click 3                  # Vision — screenshot after each command
+web-interact --vision --annotate click 3       # Annotated — numbered element overlays
 ```
 
-Or step by step:
-
+### Engine modes
 ```bash
-./setup.sh --build          # Build CLI binary + daemon bundles
-./setup.sh --install-local  # Install Patchright runtime to local/
-web-interact install        # Install Chrome for headless automation
+web-interact mode                              # Show current: default or assistant
+web-interact mode assistant                    # Patchright + auto-humanize (for sensitive sites)
+web-interact mode default                      # Playwright (standard)
 ```
 
-## Development
-
+### Browser modes
 ```bash
-pnpm run verify             # typecheck + bundle + test + build:cli
+web-interact browser-mode                      # Show current: auto, real, or sandbox
+web-interact browser-mode real                 # Connect to your running Chrome/Edge
+web-interact browser-mode sandbox              # Managed browser with persistent profile
+web-interact browser-mode auto                 # CLI decides (default)
 ```
 
-Or individually:
-
-```bash
-pnpm --dir daemon exec tsc --noEmit     # Typecheck
-pnpm run bundle                          # Bundle daemon + sandbox client
-pnpm --dir daemon exec vitest run        # Run tests (89 tests)
-cargo build --release --manifest-path cli/Cargo.toml  # Build CLI
-```
-
-## Global flags
+## Flags
 
 | Flag | Description |
 |------|-------------|
 | `--headless` | Run without visible window |
 | `--browser NAME` | Named browser instance (default: "default") |
-| `--connect [URL]` | Connect to running Chrome |
+| `--connect [URL]` | Connect to running Chrome/Edge |
+| `--own-browser` | Use your running browser (shorthand for `--connect auto`) |
+| `--humanize` | Natural delays between actions (auto in assistant mode) |
 | `--vision` | Screenshot after each command |
 | `--vision --annotate` | Annotated screenshot with element overlays |
 | `--save FILE` | Write output to file instead of stdout |
 | `--timeout SECONDS` | Script timeout (default: 20s) |
 | `--page NAME` | Named page within browser |
+
+## Claude Code plugin
+
+Add the plugin for skill-based integration:
+
+```
+/plugin marketplace add johnkozaris/web-interact-plugin
+```
+
+This gives Claude the `/web-interact`, `/mode`, and `/browser-mode` skills.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, build instructions, and architecture.
 
 ## Author
 
