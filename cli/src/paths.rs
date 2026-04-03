@@ -67,6 +67,27 @@ pub fn write_mode(mode: &str) -> io::Result<()> {
     fs::write(base.join("mode"), format!("{mode}\n"))
 }
 
+pub fn read_browser_mode() -> io::Result<String> {
+    let path = web_interact_base_dir()?.join("browser-mode");
+    match fs::read_to_string(&path) {
+        Ok(content) => {
+            let mode = content.trim().to_lowercase();
+            match mode.as_str() {
+                "real" | "sandbox" => Ok(mode),
+                _ => Ok("auto".to_string()),
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok("auto".to_string()),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn write_browser_mode(mode: &str) -> io::Result<()> {
+    let base = web_interact_base_dir()?;
+    fs::create_dir_all(&base)?;
+    fs::write(base.join("browser-mode"), format!("{mode}\n"))
+}
+
 pub fn daemon_pid_path() -> io::Result<PathBuf> {
     Ok(web_interact_base_dir()?.join("daemon.pid"))
 }

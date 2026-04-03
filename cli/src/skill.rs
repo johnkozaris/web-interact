@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 const PLUGIN_REPO: &str = "https://github.com/johnkozaris/web-interact-plugin.git";
-const PLUGIN_SKILL_PATHS: [&str; 2] = ["skills/web-interact", "skills/mode"];
+const PLUGIN_SKILL_PATHS: [&str; 3] = ["skills/web-interact", "skills/mode", "skills/browser-mode"];
 const INSTALL_ROOTS: [(&str, &str); 2] = [
     ("~/.claude/skills", ".claude/skills"),
     ("~/.agents/skills", ".agents/skills"),

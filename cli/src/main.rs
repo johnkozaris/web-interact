@@ -245,6 +245,36 @@ fn run() -> Result<i32, Box<dyn Error>> {
                 }
             }
         }
+        // Browser mode: how the browser is launched/connected
+        Some(ActionCommand::BrowserMode { target }) => {
+            match target {
+                None => {
+                    let mode = paths::read_browser_mode().unwrap_or_else(|_| "auto".to_string());
+                    let desc = match mode.as_str() {
+                        "real" => "real (connect to your running browser)",
+                        "sandbox" => "sandbox (managed browser with persistent profile)",
+                        _ => "auto (CLI decides based on context)",
+                    };
+                    println!("{desc}");
+                    Ok(0)
+                }
+                Some(new_mode) => {
+                    let new_mode = new_mode.to_lowercase();
+                    if !matches!(new_mode.as_str(), "auto" | "real" | "sandbox") {
+                        eprintln!("Invalid browser mode: {new_mode}. Use 'auto', 'real', or 'sandbox'.");
+                        return Ok(1);
+                    }
+                    paths::write_browser_mode(&new_mode)?;
+                    let desc = match new_mode.as_str() {
+                        "real" => "real (connect to your running browser)",
+                        "sandbox" => "sandbox (managed browser with persistent profile)",
+                        _ => "auto (CLI decides based on context)",
+                    };
+                    println!("Browser mode set to {desc}.");
+                    Ok(0)
+                }
+            }
+        }
         // Commands handled without script generation
         Some(ActionCommand::Run { file }) => {
             let script = fs::read_to_string(file)?;
@@ -409,12 +439,19 @@ fn resolve_humanize(cli: &Cli) -> bool {
 }
 
 fn resolve_connect(cli: &Cli) -> Option<String> {
+    // Explicit flags take priority
     if let Some(endpoint) = &cli.connect {
         return Some(endpoint.clone());
     }
     if cli.own_browser {
         return Some("auto".to_string());
     }
+    // Browser-mode config: "real" auto-connects to user's browser
+    let browser_mode = paths::read_browser_mode().unwrap_or_else(|_| "auto".to_string());
+    if browser_mode == "real" {
+        return Some("auto".to_string());
+    }
+    // "auto" and "sandbox" use managed browser (no connect)
     None
 }
 

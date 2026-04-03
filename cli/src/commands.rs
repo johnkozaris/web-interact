@@ -344,6 +344,12 @@ pub enum ActionCommand {
         target: Option<String>,
     },
 
+    #[command(name = "browser-mode", about = "Show or change how the browser is launched (auto, real, or sandbox)")]
+    BrowserMode {
+        #[arg(help = "Mode: 'auto', 'real' (your running browser), or 'sandbox' (managed)")]
+        target: Option<String>,
+    },
+
     #[command(about = "Install the browser runtime and headless Chromium")]
     Install,
 
@@ -769,6 +775,7 @@ pub fn generate_script(command: &ActionCommand) -> Option<String> {
     match command {
         ActionCommand::Run { .. }
         | ActionCommand::Mode { .. }
+        | ActionCommand::BrowserMode { .. }
         | ActionCommand::Install
         | ActionCommand::InstallSkill
         | ActionCommand::Browsers
