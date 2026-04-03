@@ -384,11 +384,17 @@ fn run() -> Result<i32, Box<dyn Error>> {
 fn run_script(cli: &Cli, script: String) -> Result<i32, Box<dyn Error>> {
     ensure_daemon()?;
 
-    let timeout_ms = u64::from(cli.timeout)
-        .checked_mul(1_000)
-        .ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "Timeout value is too large")
-        })?;
+    // click-to-fix needs 130s (user interacts with inspector for up to 2 min)
+    let is_click_to_fix = matches!(&cli.command, Some(ActionCommand::ClickToFix { .. }));
+    let timeout_ms = if is_click_to_fix {
+        130_000
+    } else {
+        u64::from(cli.timeout)
+            .checked_mul(1_000)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Timeout value is too large")
+            })?
+    };
 
     let exit_code = send_execute(cli, &script, timeout_ms)?;
 
