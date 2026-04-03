@@ -116,6 +116,7 @@ web-interact screenshot --annotate # screenshot with numbered overlays
 | **Settings** | `set viewport/geo/offline/media/headers` |
 | **Low-level** | `mouse move/click/down/up/wheel`, `keyboard type/insert/press/down/up` |
 | **Console** | `console` (JS errors, warnings, logs) |
+| **Inspect** | `click-to-fix` (click element → trace to source code) |
 | **Config** | `mode default/assistant`, `browser-mode auto/real/sandbox` |
 | **Manage** | `status`, `browsers`, `close`, `stop`, `install` |
 
