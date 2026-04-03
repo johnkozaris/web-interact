@@ -1,15 +1,13 @@
 <div align="center">
 
-# web-interact
+<img src="assets/github-banner.png" alt="web-interact — Coding Agents Surf The Web" width="100%" />
 
-**Browser automation CLI for AI agents and humans**
+<br />
 
 [![npm](https://img.shields.io/npm/v/web-interact?color=cb3837&label=npm)](https://www.npmjs.com/package/web-interact)
 [![GitHub Release](https://img.shields.io/github/v/release/johnkozaris/web-interact?color=2ea44f)](https://github.com/johnkozaris/web-interact/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
-
-<!-- TODO: banner image -->
 
 </div>
 
