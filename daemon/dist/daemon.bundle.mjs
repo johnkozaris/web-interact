@@ -17376,7 +17376,8 @@ function decodeSandboxFilePayload(value, label) {
   return Buffer.from(data, "base64");
 }
 function humanDelay(minMs, maxMs) {
-  const ms = minMs + Math.floor(Math.random() * (maxMs - minMs));
+  const t = Math.random() * Math.random();
+  const ms = Math.round(minMs + t * (maxMs - minMs));
   return new Promise((r) => setTimeout(r, ms));
 }
 var QuickJSSandbox = class {
@@ -18209,7 +18210,7 @@ return __PlaywrightClient;`);
     };
     if (action === "click") {
       if (this.#options.humanize) {
-        await humanDelay(80, 400);
+        await humanDelay(200, 600);
       }
       const urlBefore = page.url();
       const session = await page.context().newCDPSession(page);
@@ -18243,14 +18244,14 @@ return __PlaywrightClient;`);
         });
       }
       if (this.#options.humanize) {
-        await humanDelay(60, 250);
+        await humanDelay(500, 1200);
       }
       const session = await page.context().newCDPSession(page);
       try {
         await session.send("DOM.enable");
         const result = await cdpType(session, el.backendNodeId, text, {
           clearFirst: opts.clearFirst,
-          delay: this.#options.humanize ? 30 + Math.floor(Math.random() * 90) : opts.delay
+          delay: this.#options.humanize ? 80 + Math.floor(Math.random() * 120) : opts.delay
         });
         return JSON.stringify({ ...result, element: elContext });
       } finally {
@@ -18260,7 +18261,7 @@ return __PlaywrightClient;`);
     }
     if (action === "select") {
       if (this.#options.humanize) {
-        await humanDelay(80, 350);
+        await humanDelay(300, 700);
       }
       if (el.tag !== "select" && el.role !== "listbox" && el.role !== "combobox") {
         return JSON.stringify({
@@ -18276,7 +18277,7 @@ return __PlaywrightClient;`);
     }
     if (action === "check") {
       if (this.#options.humanize) {
-        await humanDelay(80, 350);
+        await humanDelay(200, 500);
       }
       if (el.tag !== "input" && el.role !== "checkbox" && el.role !== "radio" && el.role !== "switch") {
         return JSON.stringify({
