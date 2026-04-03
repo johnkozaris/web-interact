@@ -11,7 +11,7 @@ repository = "https://github.com/johnkozaris/web-interact"
 authors = ["John Kozaris <ioanniskozaris@gmail.com>", "Edoardo Re"]
 readme = "../README.md"
 rust-version = "1.85"
-version = "0.2.0"
+version = "0.2.1"
 
 [dependencies]
 clap = {version = "4.6", features = ["derive"]}
