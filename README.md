@@ -4,6 +4,7 @@
 
 <br />
 
+[![CI](https://github.com/johnkozaris/web-interact/actions/workflows/ci.yml/badge.svg)](https://github.com/johnkozaris/web-interact/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/web-interact?color=cb3837&label=npm)](https://www.npmjs.com/package/web-interact)
 [![GitHub Release](https://img.shields.io/github/v/release/johnkozaris/web-interact?color=2ea44f)](https://github.com/johnkozaris/web-interact/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
