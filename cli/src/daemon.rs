@@ -65,6 +65,7 @@ struct EmbeddedRuntimeManifest {
 
 #[derive(Deserialize)]
 struct InstalledPackageManifest {
+    name: Option<String>,
     version: String,
 }
 
@@ -383,15 +384,20 @@ fn dependency_installed(base_dir: &Path, package_name: &str, expected_version: &
         Err(_) => return false,
     };
 
-    // npm aliases: "patchright": "npm:playwright@1.52.0" installs playwright
-    // under node_modules/patchright, so check the aliased version too.
-    let expected = if expected_version.starts_with("npm:") {
-        expected_version.rsplit_once('@').map_or(expected_version, |(_, v)| v)
+    if expected_version.starts_with("npm:") {
+        // Alias: "npm:playwright@1.59.1" — check the installed package is actually playwright
+        let (expected_name, expected_ver) = expected_version
+            .strip_prefix("npm:")
+            .unwrap()
+            .rsplit_once('@')
+            .unwrap_or(("", expected_version));
+        let name_matches = installed_manifest.name.as_deref() == Some(expected_name);
+        let version_matches = installed_manifest.version == expected_ver;
+        name_matches && version_matches
     } else {
-        expected_version
-    };
-
-    installed_manifest.version == expected
+        // Real package: "1.59.1" — just check version
+        installed_manifest.version == expected_version
+    }
 }
 
 fn run_package_manager_command(args: &[&str], current_dir: &Path) -> Result<(), Box<dyn Error>> {
