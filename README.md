@@ -254,9 +254,10 @@ web-interact --vision click 3
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, architecture, and build instructions.
 
-## Author
+## Authors
 
-**John Kozaris** — [ioanniskozaris@gmail.com](mailto:ioanniskozaris@gmail.com) · [GitHub](https://github.com/johnkozaris)
+**John Kozaris** — [GitHub](https://github.com/johnkozaris)
+**Edoardo Re** — [GitHub](https://github.com/edoardorex)
 
 ## License
 
