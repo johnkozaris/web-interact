@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 const PLUGIN_REPO: &str = "https://github.com/johnkozaris/web-interact-plugin.git";
-const PLUGIN_SKILL_PATHS: [&str; 3] = ["skills/web-interact", "skills/mode", "skills/browser-mode"];
+const PLUGIN_SKILL_PATHS: [&str; 4] = ["skills/web-interact", "skills/mode", "skills/browser-mode", "skills/click-to-fix"];
 const INSTALL_ROOTS: [(&str, &str); 2] = [
     ("~/.claude/skills", ".claude/skills"),
     ("~/.agents/skills", ".agents/skills"),
@@ -58,7 +58,7 @@ pub fn install_skill() -> Result<(), Box<dyn Error>> {
     }
 
     println!();
-    println!("Done. Restart Claude Code to pick up the new skill.");
+    println!("Done. Restart Claude Code to pick up the new skills.");
 
     Ok(())
 }
