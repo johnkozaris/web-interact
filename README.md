@@ -48,7 +48,14 @@ If you use Claude Code, add the plugin for seamless integration:
 /plugin marketplace add johnkozaris/web-interact-plugin
 ```
 
-Claude gets `/web-interact`, `/click-to-fix`, `/mode`, and `/browser-mode` skills — it knows when and how to use the CLI automatically.
+Claude gets these skills automatically:
+
+| Skill | What it does |
+|-------|-------------|
+| `/web-interact` | Full browser automation — navigate, discover, click, fill, screenshot |
+| `/click-to-fix` | Click any element in your running app to trace it back to its source code. Uses React/Vue/Svelte/Angular dev metadata to find the component file, then opens it so you can review and fix |
+| `/mode` | Switch between default (Playwright) and assistant (Patchright + humanize) engines |
+| `/browser-mode` | Choose browser strategy — your own browser, managed sandbox, or auto |
 
 ---
 
