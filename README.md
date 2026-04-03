@@ -264,8 +264,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, architecture, and 
 
 ## Authors
 
-**John Kozaris** — [GitHub](https://github.com/johnkozaris)
-**Edoardo Re** — [GitHub](https://github.com/edoardorex)
+[**John Kozaris**](https://github.com/johnkozaris)
+
+[**Edoardo Re**](https://github.com/edoardorex)
 
 ## License
 
