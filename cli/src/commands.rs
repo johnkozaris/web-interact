@@ -827,7 +827,7 @@ console.log(result.serialized);"#,
             r#"const page = await browser.getPage({page});
 await page.evaluate(() => {{ window.__clickToFixResult = undefined; }});
 await page.evaluate(() => {{ {CLICK_TO_FIX_INJECT_JS} }});
-await page.waitForFunction(() => window.__clickToFixResult !== undefined, {{ timeout: 120000 }});
+await page.waitForFunction(() => window.__clickToFixResult !== undefined, null, {{ timeout: 120000 }});
 const result = await page.evaluate(() => JSON.stringify(window.__clickToFixResult));
 console.log(result);"#,
             page = js_str(page),
