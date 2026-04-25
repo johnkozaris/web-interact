@@ -143,6 +143,25 @@ var PROBE_TIMEOUT_MS = 750;
 var MANUAL_CONNECT_TIMEOUT_MS = 5e3;
 var PAGE_TITLE_TIMEOUT_MS = 1500;
 var TARGET_ID_PATTERN = /^[a-f0-9]{16,}$/i;
+var CHROMIUM_SANDBOX_ENV = "WEB_INTERACT_CHROMIUM_SANDBOX";
+var ENV_TRUE_VALUES = /* @__PURE__ */ new Set(["1", "true", "yes", "on"]);
+var ENV_FALSE_VALUES = /* @__PURE__ */ new Set(["0", "false", "no", "off"]);
+function resolveChromiumSandbox() {
+  const configured = process.env[CHROMIUM_SANDBOX_ENV];
+  if (configured === void 0) {
+    return true;
+  }
+  const normalized = configured.trim().toLowerCase();
+  if (ENV_TRUE_VALUES.has(normalized)) {
+    return true;
+  }
+  if (ENV_FALSE_VALUES.has(normalized)) {
+    return false;
+  }
+  throw new Error(
+    `${CHROMIUM_SANDBOX_ENV} must be one of: true, false, 1, 0, yes, no, on, off. Got: ${configured}`
+  );
+}
 function isIgnorableFileError(error48) {
   const code = error48?.code;
   return code === "ENOENT" || code === "ENOTDIR" || code === "EACCES";
@@ -405,6 +424,7 @@ var BrowserManager = class {
       headless,
       viewport: headless ? void 0 : null,
       ignoreHTTPSErrors,
+      chromiumSandbox: resolveChromiumSandbox(),
       handleSIGINT: false,
       handleSIGTERM: false,
       handleSIGHUP: false

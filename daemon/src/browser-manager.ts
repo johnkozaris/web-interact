@@ -109,6 +109,28 @@ const PROBE_TIMEOUT_MS = 750;
 const MANUAL_CONNECT_TIMEOUT_MS = 5_000;
 const PAGE_TITLE_TIMEOUT_MS = 1_500;
 const TARGET_ID_PATTERN = /^[a-f0-9]{16,}$/i;
+const CHROMIUM_SANDBOX_ENV = "WEB_INTERACT_CHROMIUM_SANDBOX";
+const ENV_TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+const ENV_FALSE_VALUES = new Set(["0", "false", "no", "off"]);
+
+function resolveChromiumSandbox(): boolean {
+  const configured = process.env[CHROMIUM_SANDBOX_ENV];
+  if (configured === undefined) {
+    return true;
+  }
+
+  const normalized = configured.trim().toLowerCase();
+  if (ENV_TRUE_VALUES.has(normalized)) {
+    return true;
+  }
+  if (ENV_FALSE_VALUES.has(normalized)) {
+    return false;
+  }
+
+  throw new Error(
+    `${CHROMIUM_SANDBOX_ENV} must be one of: true, false, 1, 0, yes, no, on, off. Got: ${configured}`
+  );
+}
 
 function isIgnorableFileError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -471,6 +493,7 @@ export class BrowserManager {
       headless,
       viewport: headless ? undefined : null,
       ignoreHTTPSErrors,
+      chromiumSandbox: resolveChromiumSandbox(),
       handleSIGINT: false,
       handleSIGTERM: false,
       handleSIGHUP: false,

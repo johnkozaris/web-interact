@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Managed Chromium launches now enable Chromium sandboxing by default, with `WEB_INTERACT_CHROMIUM_SANDBOX=false` as an explicit compatibility escape hatch for restricted hosts.
+
 ## 0.2.1 (2026-04-03)
 
 ### Bug Fixes

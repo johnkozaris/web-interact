@@ -198,6 +198,7 @@ function getInternals(manager: BrowserManager): BrowserManagerInternals {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("BrowserManager auto-connect", () => {
@@ -223,6 +224,7 @@ describe("BrowserManager auto-connect", () => {
       path.join("/tmp/web-interact-auto-connect-tests", "launched", "browser-profile"),
       expect.objectContaining({
         channel: "chrome",
+        chromiumSandbox: true,
         headless: false,
         ignoreHTTPSErrors: true,
         viewport: null,
@@ -241,6 +243,7 @@ describe("BrowserManager auto-connect", () => {
       path.join("/tmp/web-interact-auto-connect-tests", "launched", "browser-profile"),
       expect.objectContaining({
         channel: "chrome",
+        chromiumSandbox: true,
         headless: false,
         ignoreHTTPSErrors: false,
         viewport: null,
@@ -274,6 +277,7 @@ describe("BrowserManager auto-connect", () => {
       path.join("/tmp/web-interact-auto-connect-tests", "launched", "browser-profile"),
       expect.objectContaining({
         channel: "chrome",
+        chromiumSandbox: true,
         headless: true,
         ignoreHTTPSErrors: true,
         viewport: undefined,
@@ -282,6 +286,41 @@ describe("BrowserManager auto-connect", () => {
     expect(relaunchedEntry).not.toBe(firstEntry);
     expect(relaunchedEntry.headless).toBe(true);
     expect(relaunchedEntry.ignoreHTTPSErrors).toBe(true);
+  });
+
+  it("allows Chromium sandboxing to be disabled for incompatible hosts", async () => {
+    vi.stubEnv("WEB_INTERACT_CHROMIUM_SANDBOX", "false");
+    const launchPersistentContext = vi.fn(async () => {
+      const context = new MockContext();
+      const browser = new MockBrowser([context]);
+      context.setBrowser(browser);
+      return context;
+    });
+    const { manager } = createManager({
+      launchPersistentContext,
+    });
+
+    await manager.ensureBrowser("launched");
+
+    expect(launchPersistentContext).toHaveBeenCalledWith(
+      path.join("/tmp/web-interact-auto-connect-tests", "launched", "browser-profile"),
+      expect.objectContaining({
+        chromiumSandbox: false,
+      })
+    );
+  });
+
+  it("rejects invalid Chromium sandbox environment values", async () => {
+    vi.stubEnv("WEB_INTERACT_CHROMIUM_SANDBOX", "sometimes");
+    const launchPersistentContext = vi.fn();
+    const { manager } = createManager({
+      launchPersistentContext,
+    });
+
+    await expect(manager.ensureBrowser("launched")).rejects.toThrow(
+      "WEB_INTERACT_CHROMIUM_SANDBOX"
+    );
+    expect(launchPersistentContext).not.toHaveBeenCalled();
   });
 
   it("parses DevToolsActivePort and returns the browser websocket endpoint", async () => {

@@ -184,6 +184,12 @@ web-interact browser-mode auto     # CLI decides (default)
 | `--timeout SECONDS` | Script timeout (default: 20s) |
 | `--page NAME` | Named page within browser |
 
+### Environment
+
+| Variable | Description |
+|----------|-------------|
+| `WEB_INTERACT_CHROMIUM_SANDBOX=false` | Disable Chromium sandboxing for incompatible CI/container hosts. Managed launches enable sandboxing by default. |
+
 ---
 
 ## Examples

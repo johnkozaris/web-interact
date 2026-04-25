@@ -13,6 +13,11 @@ const cliDaemonPath = path.join(repoDir, "cli", "src", "daemon.rs");
 const embeddedDaemonPath = path.join(repoDir, "daemon", "src", "daemon.ts");
 const expectedPnpmPackageManager = "pnpm@10.33.0";
 const runtimeDependencyNames = ["patchright", "patchright-core", "quickjs-emscripten"];
+const runtimeDependencyVersionConstants = {
+  patchright: "PATCHRIGHT_VERSION",
+  "patchright-core": "PATCHRIGHT_VERSION",
+  "quickjs-emscripten": "QUICKJS_VERSION",
+};
 const exactVersionPattern = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 
 const forbiddenLifecycleScripts = [
@@ -54,7 +59,21 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function findStringConstant(source, constantName) {
+  const escapedConstantName = escapeRegExp(constantName);
+  const match = source.match(
+    new RegExp(`\\bconst\\s+${escapedConstantName}\\s*(?::\\s*&str)?\\s*=\\s*"([^"]+)"`)
+  );
+  return match?.[1];
+}
+
 function findEmbeddedDependencyVersion(source, packageName) {
+  const constantName = runtimeDependencyVersionConstants[packageName];
+  const constantVersion = constantName ? findStringConstant(source, constantName) : undefined;
+  if (constantVersion) {
+    return constantVersion;
+  }
+
   const escapedPackageName = escapeRegExp(packageName);
   const match = source.match(new RegExp(`"?${escapedPackageName}"?\\s*:\\s*"([^"]+)"`));
   return match?.[1];
