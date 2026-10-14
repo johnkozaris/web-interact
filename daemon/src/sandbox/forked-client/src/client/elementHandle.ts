@@ -15,13 +15,18 @@
  * limitations under the License.
  */
 
+import fs from "fs";
+import path from "path";
+import stream from "stream";
+
+import { assert } from "../utils/isomorphic/assert";
+import { isString } from "../utils/isomorphic/rtti";
+import { getMimeTypeForPath } from "../utils/isomorphic/mimeType";
 import { Frame } from "./frame";
 import { JSHandle, parseResult, serializeArgument } from "./jsHandle";
-import { assert } from "../utils/isomorphic/assert";
 import { fileUploadSizeLimit, writeTempFile } from "./fileUtils";
-import { isString } from "../utils/isomorphic/rtti";
 import { WritableStream } from "./writableStream";
-import { getMimeTypeForPath } from "../utils/isomorphic/mimeType";
+import { kNoTimeout } from "./timeoutSettings";
 
 import type { BrowserContext } from "./browserContext";
 import type { ChannelOwner } from "./channelOwner";
@@ -29,7 +34,6 @@ import type { Locator } from "./locator";
 import type { FilePayload, Rect, SelectOption, SelectOptionOptions, TimeoutOptions } from "./types";
 import type * as structs from "../../types/structs";
 import type * as api from "../../types/types";
-import type { Platform } from "./platform";
 import type * as channels from "../protocol/channels";
 
 export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements api.ElementHandle {
@@ -60,91 +64,91 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
   }
 
   async ownerFrame(): Promise<Frame | null> {
-    return Frame.fromNullable((await this._elementChannel.ownerFrame()).frame);
+    return Frame.fromNullable((await this._elementChannel.ownerFrame({}, kNoTimeout)).frame);
   }
 
   async contentFrame(): Promise<Frame | null> {
-    return Frame.fromNullable((await this._elementChannel.contentFrame()).frame);
+    return Frame.fromNullable((await this._elementChannel.contentFrame({}, kNoTimeout)).frame);
   }
 
   async getAttribute(name: string): Promise<string | null> {
-    const value = (await this._elementChannel.getAttribute({ name })).value;
+    const value = (await this._elementChannel.getAttribute({ name }, kNoTimeout)).value;
     return value === undefined ? null : value;
   }
 
   async inputValue(): Promise<string> {
-    return (await this._elementChannel.inputValue()).value;
+    return (await this._elementChannel.inputValue({}, kNoTimeout)).value;
   }
 
   async textContent(): Promise<string | null> {
-    const value = (await this._elementChannel.textContent()).value;
+    const value = (await this._elementChannel.textContent({}, kNoTimeout)).value;
     return value === undefined ? null : value;
   }
 
   async innerText(): Promise<string> {
-    return (await this._elementChannel.innerText()).value;
+    return (await this._elementChannel.innerText({}, kNoTimeout)).value;
   }
 
   async innerHTML(): Promise<string> {
-    return (await this._elementChannel.innerHTML()).value;
+    return (await this._elementChannel.innerHTML({}, kNoTimeout)).value;
   }
 
   async isChecked(): Promise<boolean> {
-    return (await this._elementChannel.isChecked()).value;
+    return (await this._elementChannel.isChecked({}, kNoTimeout)).value;
   }
 
   async isDisabled(): Promise<boolean> {
-    return (await this._elementChannel.isDisabled()).value;
+    return (await this._elementChannel.isDisabled({}, kNoTimeout)).value;
   }
 
   async isEditable(): Promise<boolean> {
-    return (await this._elementChannel.isEditable()).value;
+    return (await this._elementChannel.isEditable({}, kNoTimeout)).value;
   }
 
   async isEnabled(): Promise<boolean> {
-    return (await this._elementChannel.isEnabled()).value;
+    return (await this._elementChannel.isEnabled({}, kNoTimeout)).value;
   }
 
   async isHidden(): Promise<boolean> {
-    return (await this._elementChannel.isHidden()).value;
+    return (await this._elementChannel.isHidden({}, kNoTimeout)).value;
   }
 
   async isVisible(): Promise<boolean> {
-    return (await this._elementChannel.isVisible()).value;
+    return (await this._elementChannel.isVisible({}, kNoTimeout)).value;
   }
 
   async dispatchEvent(type: string, eventInit: Object = {}) {
-    await this._elementChannel.dispatchEvent({ type, eventInit: serializeArgument(eventInit) });
+    await this._elementChannel.dispatchEvent(
+      { type, eventInit: serializeArgument(eventInit) },
+      kNoTimeout
+    );
   }
 
   async scrollIntoViewIfNeeded(
     options: channels.ElementHandleScrollIntoViewIfNeededOptions & TimeoutOptions = {}
   ) {
-    await this._elementChannel.scrollIntoViewIfNeeded({
-      ...options,
-      timeout: this._frame._timeout(options),
-    });
+    await this._elementChannel.scrollIntoViewIfNeeded(
+      { ...options },
+      this._frame._timeout(options)
+    );
   }
 
   async hover(options: channels.ElementHandleHoverOptions & TimeoutOptions = {}): Promise<void> {
-    await this._elementChannel.hover({ ...options, timeout: this._frame._timeout(options) });
+    await this._elementChannel.hover({ ...options }, this._frame._timeout(options));
   }
 
   async click(options: channels.ElementHandleClickOptions & TimeoutOptions = {}): Promise<void> {
-    return await this._elementChannel.click({ ...options, timeout: this._frame._timeout(options) });
+    return await this._elementChannel.click({ ...options }, this._frame._timeout(options));
   }
 
   async dblclick(
     options: channels.ElementHandleDblclickOptions & TimeoutOptions = {}
   ): Promise<void> {
-    return await this._elementChannel.dblclick({
-      ...options,
-      timeout: this._frame._timeout(options),
-    });
+    return await this._elementChannel.dblclick({ ...options }, this._frame._timeout(options));
   }
 
   async tap(options: channels.ElementHandleTapOptions & TimeoutOptions = {}): Promise<void> {
-    return await this._elementChannel.tap({ ...options, timeout: this._frame._timeout(options) });
+    return await this._elementChannel.tap({ ...options }, this._frame._timeout(options));
   }
 
   async selectOption(
@@ -158,11 +162,10 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
       | null,
     options: SelectOptionOptions = {}
   ): Promise<string[]> {
-    const result = await this._elementChannel.selectOption({
-      ...convertSelectOptionValues(values),
-      ...options,
-      timeout: this._frame._timeout(options),
-    });
+    const result = await this._elementChannel.selectOption(
+      { ...convertSelectOptionValues(values), ...options },
+      this._frame._timeout(options)
+    );
     return result.values;
   }
 
@@ -170,17 +173,13 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
     value: string,
     options: channels.ElementHandleFillOptions & TimeoutOptions = {}
   ): Promise<void> {
-    return await this._elementChannel.fill({
-      value,
-      ...options,
-      timeout: this._frame._timeout(options),
-    });
+    return await this._elementChannel.fill({ value, ...options }, this._frame._timeout(options));
   }
 
   async selectText(
     options: channels.ElementHandleSelectTextOptions & TimeoutOptions = {}
   ): Promise<void> {
-    await this._elementChannel.selectText({ ...options, timeout: this._frame._timeout(options) });
+    await this._elementChannel.selectText({ ...options }, this._frame._timeout(options));
   }
 
   async setInputFiles(
@@ -189,41 +188,37 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
   ) {
     const frame = await this.ownerFrame();
     if (!frame) throw new Error("Cannot set input files to detached element");
-    const converted = await convertInputFiles(this._platform, files, frame.page().context());
-    await this._elementChannel.setInputFiles({
-      ...converted,
-      ...options,
-      timeout: this._frame._timeout(options),
-    });
+    const converted = await convertInputFiles(files, frame.page().context());
+    await this._elementChannel.setInputFiles(
+      { ...converted, ...options },
+      this._frame._timeout(options)
+    );
   }
 
   async focus(): Promise<void> {
-    await this._elementChannel.focus();
+    await this._elementChannel.focus({}, kNoTimeout);
   }
 
   async type(
     text: string,
     options: channels.ElementHandleTypeOptions & TimeoutOptions = {}
   ): Promise<void> {
-    await this._elementChannel.type({ text, ...options, timeout: this._frame._timeout(options) });
+    await this._elementChannel.type({ text, ...options }, this._frame._timeout(options));
   }
 
   async press(
     key: string,
     options: channels.ElementHandlePressOptions & TimeoutOptions = {}
   ): Promise<void> {
-    await this._elementChannel.press({ key, ...options, timeout: this._frame._timeout(options) });
+    await this._elementChannel.press({ key, ...options }, this._frame._timeout(options));
   }
 
   async check(options: channels.ElementHandleCheckOptions & TimeoutOptions = {}) {
-    return await this._elementChannel.check({ ...options, timeout: this._frame._timeout(options) });
+    return await this._elementChannel.check({ ...options }, this._frame._timeout(options));
   }
 
   async uncheck(options: channels.ElementHandleUncheckOptions & TimeoutOptions = {}) {
-    return await this._elementChannel.uncheck({
-      ...options,
-      timeout: this._frame._timeout(options),
-    });
+    return await this._elementChannel.uncheck({ ...options }, this._frame._timeout(options));
   }
 
   async setChecked(checked: boolean, options?: channels.ElementHandleCheckOptions) {
@@ -232,7 +227,7 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
   }
 
   async boundingBox(): Promise<Rect | null> {
-    const value = (await this._elementChannel.boundingBox()).value;
+    const value = (await this._elementChannel.boundingBox({}, kNoTimeout)).value;
     return value === undefined ? null : value;
   }
 
@@ -245,7 +240,6 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
       ...options,
       path: undefined,
       mask: undefined,
-      timeout: this._frame._timeout(options),
     };
     if (!copy.type) copy.type = determineScreenshotType(options);
     if (mask) {
@@ -254,7 +248,7 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
         selector: locator._selector,
       }));
     }
-    const result = await this._elementChannel.screenshot(copy);
+    const result = await this._elementChannel.screenshot(copy, this._frame._timeout(options));
     if (options.path) {
       options.path = await writeTempFile(options.path, result.binary);
     }
@@ -263,12 +257,12 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
 
   async $(selector: string): Promise<ElementHandle<SVGElement | HTMLElement> | null> {
     return ElementHandle.fromNullable(
-      (await this._elementChannel.querySelector({ selector })).element
+      (await this._elementChannel.querySelector({ selector }, kNoTimeout)).element
     ) as ElementHandle<SVGElement | HTMLElement> | null;
   }
 
   async $$(selector: string): Promise<ElementHandle<SVGElement | HTMLElement>[]> {
-    const result = await this._elementChannel.querySelectorAll({ selector });
+    const result = await this._elementChannel.querySelectorAll({ selector }, kNoTimeout);
     return result.elements.map(
       (h) => ElementHandle.from(h) as ElementHandle<SVGElement | HTMLElement>
     );
@@ -279,12 +273,15 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
     pageFunction: structs.PageFunctionOn<Element, Arg, R>,
     arg?: Arg
   ): Promise<R> {
-    const result = await this._elementChannel.evalOnSelector({
-      selector,
-      expression: String(pageFunction),
-      isFunction: typeof pageFunction === "function",
-      arg: serializeArgument(arg),
-    });
+    const result = await this._elementChannel.evalOnSelector(
+      {
+        selector,
+        expression: String(pageFunction),
+        isFunction: typeof pageFunction === "function",
+        arg: serializeArgument(arg),
+      },
+      kNoTimeout
+    );
     return parseResult(result.value);
   }
 
@@ -293,12 +290,15 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
     pageFunction: structs.PageFunctionOn<Element[], Arg, R>,
     arg?: Arg
   ): Promise<R> {
-    const result = await this._elementChannel.evalOnSelectorAll({
-      selector,
-      expression: String(pageFunction),
-      isFunction: typeof pageFunction === "function",
-      arg: serializeArgument(arg),
-    });
+    const result = await this._elementChannel.evalOnSelectorAll(
+      {
+        selector,
+        expression: String(pageFunction),
+        isFunction: typeof pageFunction === "function",
+        arg: serializeArgument(arg),
+      },
+      kNoTimeout
+    );
     return parseResult(result.value);
   }
 
@@ -306,11 +306,10 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
     state: "visible" | "hidden" | "stable" | "enabled" | "disabled",
     options: TimeoutOptions = {}
   ): Promise<void> {
-    return await this._elementChannel.waitForElementState({
-      state,
-      ...options,
-      timeout: this._frame._timeout(options),
-    });
+    return await this._elementChannel.waitForElementState(
+      { state, ...options },
+      this._frame._timeout(options)
+    );
   }
 
   waitForSelector(
@@ -326,11 +325,10 @@ export class ElementHandle<T extends Node = Node> extends JSHandle<T> implements
     selector: string,
     options: channels.ElementHandleWaitForSelectorOptions & TimeoutOptions = {}
   ): Promise<ElementHandle<SVGElement | HTMLElement> | null> {
-    const result = await this._elementChannel.waitForSelector({
-      selector,
-      ...options,
-      timeout: this._frame._timeout(options),
-    });
+    const result = await this._elementChannel.waitForSelector(
+      { selector, ...options },
+      this._frame._timeout(options)
+    );
     return ElementHandle.fromNullable(result.element) as ElementHandle<
       SVGElement | HTMLElement
     > | null;
@@ -372,19 +370,18 @@ function filePayloadExceedsSizeLimit(payloads: FilePayload[]) {
 }
 
 async function resolvePathsAndDirectoryForInputFiles(
-  platform: Platform,
   items: string[]
 ): Promise<[string[] | undefined, string | undefined]> {
   let localPaths: string[] | undefined;
   let localDirectory: string | undefined;
   for (const item of items) {
-    const stat = await platform.fs().promises.stat(item as string);
+    const stat = await fs.promises.stat(item as string);
     if (stat.isDirectory()) {
       if (localDirectory) throw new Error("Multiple directories are not supported");
-      localDirectory = platform.path().resolve(item as string);
+      localDirectory = path.resolve(item as string);
     } else {
       localPaths ??= [];
-      localPaths.push(platform.path().resolve(item as string));
+      localPaths.push(path.resolve(item as string));
     }
   }
   if (localPaths?.length && localDirectory)
@@ -393,7 +390,6 @@ async function resolvePathsAndDirectoryForInputFiles(
 }
 
 export async function convertInputFiles(
-  platform: Platform,
   files: string | FilePayload | string[] | FilePayload[],
   context: BrowserContext
 ): Promise<SetInputFilesFiles> {
@@ -403,42 +399,38 @@ export async function convertInputFiles(
     if (!items.every((item) => typeof item === "string"))
       throw new Error("File paths cannot be mixed with buffers");
 
-    const [localPaths, localDirectory] = await resolvePathsAndDirectoryForInputFiles(
-      platform,
-      items
-    );
+    const [localPaths, localDirectory] = await resolvePathsAndDirectoryForInputFiles(items);
 
     if (context._connection.isRemote()) {
       const files = localDirectory
-        ? (
-            await platform
-              .fs()
-              .promises.readdir(localDirectory, { withFileTypes: true, recursive: true })
-          )
+        ? (await fs.promises.readdir(localDirectory, { withFileTypes: true, recursive: true }))
             .filter((f) => f.isFile())
-            .map((f) => platform.path().join(f.parentPath, f.name))
+            .map((f) => path.join(f.parentPath, f.name))
         : localPaths!;
       const { writableStreams, rootDir } = await context._wrapApiCall(
         async () =>
-          context._channel.createTempFiles({
-            rootDirName: localDirectory ? platform.path().basename(localDirectory) : undefined,
-            items: await Promise.all(
-              files.map(async (file) => {
-                const lastModifiedMs = (await platform.fs().promises.stat(file)).mtimeMs;
-                return {
-                  name: localDirectory
-                    ? platform.path().relative(localDirectory, file)
-                    : platform.path().basename(file),
-                  lastModifiedMs,
-                };
-              })
-            ),
-          }),
+          context._channel.createTempFiles(
+            {
+              rootDirName: localDirectory ? path.basename(localDirectory) : undefined,
+              items: await Promise.all(
+                files.map(async (file) => {
+                  const lastModifiedMs = (await fs.promises.stat(file)).mtimeMs;
+                  return {
+                    name: localDirectory
+                      ? path.relative(localDirectory, file)
+                      : path.basename(file),
+                    lastModifiedMs,
+                  };
+                })
+              ),
+            },
+            kNoTimeout
+          ),
         { internal: true }
       );
       for (let i = 0; i < files.length; i++) {
         const writable = WritableStream.from(writableStreams[i]);
-        await platform.streamFile(files[i], writable.stream());
+        await stream.promises.pipeline(fs.createReadStream(files[i]), writable.stream());
       }
       return {
         directoryStream: rootDir,
@@ -461,12 +453,13 @@ export async function convertInputFiles(
 
 export function determineScreenshotType(options: {
   path?: string;
-  type?: "png" | "jpeg";
-}): "png" | "jpeg" | undefined {
+  type?: "png" | "jpeg" | "webp";
+}): "png" | "jpeg" | "webp" | undefined {
   if (options.path) {
     const mimeType = getMimeTypeForPath(options.path);
     if (mimeType === "image/png") return "png";
     else if (mimeType === "image/jpeg") return "jpeg";
+    else if (mimeType === "image/webp") return "webp";
     throw new Error(`path: unsupported mime type "${mimeType}"`);
   }
   return options.type;

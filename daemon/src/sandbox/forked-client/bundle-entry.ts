@@ -1,5 +1,4 @@
 export { Connection } from "./src/client/connection";
-export { quickjsPlatform } from "./quickjs-platform";
 
 export type { Browser } from "./src/client/browser";
 export type { BrowserContext } from "./src/client/browserContext";

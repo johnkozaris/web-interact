@@ -42,7 +42,6 @@ describe("forked Playwright bundle", () => {
     ).not.toThrow();
 
     expect(host.executeScriptSync("typeof __PlaywrightClient.Connection")).toBe("function");
-    expect(host.executeScriptSync("typeof __PlaywrightClient.quickjsPlatform")).toBe("object");
 
     expect(() =>
       host.executeScriptSync(`

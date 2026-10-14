@@ -169,11 +169,11 @@ importers:
   daemon:
     dependencies:
       patchright:
-        specifier: 1.59.1
-        version: 1.59.1
+        specifier: 1.64.0
+        version: 1.64.0
       patchright-core:
-        specifier: 1.59.1
-        version: 1.59.1
+        specifier: 1.64.0
+        version: 1.64.0
       quickjs-emscripten:
         specifier: 0.32.0
         version: 0.32.0
@@ -837,11 +837,6 @@ packages:
       picomatch:
         optional: true
 
-  fsevents@2.3.2:
-    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
-    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
-    os: [darwin]
-
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -933,14 +928,14 @@ packages:
     resolution: {integrity: sha512-5vvB5+W7ePv+p3uqxi+RcW1XAzLW0/hxt3/4X4Lc4qHudzOhmBiBwOY6DRob4WnanAEGvNcLjF+KNOufrUoEQw==}
     engines: {node: '>=12.20.0'}
 
-  patchright-core@1.59.1:
-    resolution: {integrity: sha512-VthHtavFwFgs5VRalZtbacmjw8E7SPXPhGjfOakvjPsrJcIHl/i7K9lgKYpevy4F90+/GQSJiO0Mt58JB4+9HQ==}
-    engines: {node: '>=18'}
+  patchright-core@1.64.0:
+    resolution: {integrity: sha512-QTud+z8CkPVSAAQiT+C+MqENgoEAbzlJg2h1GxRn/M9KbfeUJp+apteC62B+mCCEbZh4VEVJnMpXYzXUC9SPsQ==}
+    engines: {node: '>=20'}
     hasBin: true
 
-  patchright@1.59.1:
-    resolution: {integrity: sha512-nrWFE1/U3qu9ybrgNFJt75iTiszvZ23Dn4S6UDSydbXJtbyBXRVGenHowKq6n7hmArGYPVTfuDqiXVH7avPkiw==}
-    engines: {node: '>=18'}
+  patchright@1.64.0:
+    resolution: {integrity: sha512-DjQePnWfvYrNFB65SWhGp7aKKX1fuM7BRxoiaMvhUwrAbi1Ce/Vn4td0YwRq7GXT58op7zvqW6Jm+DF92xfWfg==}
+    engines: {node: '>=20'}
     hasBin: true
 
   picocolors@1.1.1:
@@ -1491,9 +1486,6 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.7
 
-  fsevents@2.3.2:
-    optional: true
-
   fsevents@2.3.3:
     optional: true
 
@@ -1554,13 +1546,11 @@ snapshots:
 
   obug@3.0.0: {}
 
-  patchright-core@1.59.1: {}
+  patchright-core@1.64.0: {}
 
-  patchright@1.59.1:
+  patchright@1.64.0:
     dependencies:
-      patchright-core: 1.59.1
-    optionalDependencies:
-      fsevents: 2.3.2
+      patchright-core: 1.64.0
 
   picocolors@1.1.1: {}
 

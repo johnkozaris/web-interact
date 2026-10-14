@@ -2,7 +2,7 @@
 /**
  * Copyright (c) Microsoft Corporation.
  *
- * Licensed under the Apache License, Version 2.0 (the 'License");
+ * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
@@ -15,6 +15,13 @@
  * limitations under the License.
  */
 
+import colors from "colors/safe";
+import { rewriteErrorMessage } from "../utils/isomorphic/stackTrace";
+import { isUnderTest } from "../utils/debug";
+import { debugLogger } from "../utils/debugLogger";
+import { emptyZone } from "../utils/zones";
+import { ValidationError, findValidator, maybeFindValidator } from "../protocol/validator";
+import { createCallIdGenerator } from "../utils/isomorphic/trace/traceUtils";
 import { EventEmitter } from "./eventEmitter";
 import { Android, AndroidDevice, AndroidSocket } from "./android";
 import { Artifact } from "./artifact";
@@ -29,7 +36,7 @@ import { Dialog } from "./dialog";
 import { DisposableObject } from "./disposable";
 import { Electron, ElectronApplication } from "./electron";
 import { ElementHandle } from "./elementHandle";
-import { TargetClosedError, parseError } from "./errors";
+import { AbortError, TargetClosedError, parseError } from "./errors";
 import { APIRequestContext } from "./fetch";
 import { Frame } from "./frame";
 import { JSHandle } from "./jsHandle";
@@ -42,13 +49,10 @@ import { Stream } from "./stream";
 import { Tracing } from "./tracing";
 import { Worker } from "./worker";
 import { WritableStream } from "./writableStream";
-import { ValidationError, findValidator } from "../protocol/validator";
-import { rewriteErrorMessage } from "../utils/isomorphic/stackTrace";
-import { quickjsPlatform } from "../../quickjs-platform";
+import { kNoTimeout } from "./timeoutSettings";
 import type { ClientInstrumentation } from "./clientInstrumentation";
 import type { HeadersArray } from "./types";
 import type { ValidatorContext } from "../protocol/validator";
-import type { Platform } from "./platform";
 import type * as channels from "../protocol/channels";
 
 class Root extends ChannelOwner<channels.RootChannel> {
@@ -59,9 +63,12 @@ class Root extends ChannelOwner<channels.RootChannel> {
   async initialize(): Promise<Playwright> {
     return Playwright.from(
       (
-        await this._channel.initialize({
-          sdkLanguage: "javascript",
-        })
+        await this._channel.initialize(
+          {
+            sdkLanguage: "javascript",
+          },
+          kNoTimeout
+        )
       ).playwright
     );
   }
@@ -69,15 +76,23 @@ class Root extends ChannelOwner<channels.RootChannel> {
 
 class DummyChannelOwner extends ChannelOwner {}
 
+export type ChannelOwnerFactory = (
+  parent: ChannelOwner,
+  type: string,
+  guid: string,
+  initializer: any
+) => ChannelOwner;
+
 export class Connection extends EventEmitter {
   readonly _objects = new Map<string, ChannelOwner>();
   onmessage = (message: object): void => {};
-  private _lastId = 0;
+  private _nextCallId = createCallIdGenerator();
   private _callbacks = new Map<
-    number,
+    string,
     {
       resolve: (a: any) => void;
       reject: (a: Error) => void;
+      signal: AbortSignal | undefined;
       title: string | undefined;
       type: string;
       method: string;
@@ -94,18 +109,63 @@ export class Connection extends EventEmitter {
   readonly _instrumentation: ClientInstrumentation;
   // Used from @playwright/test fixtures -> TODO remove?
   readonly headers: HeadersArray;
+  private _objectFactories = new Map<string, ChannelOwnerFactory>();
 
   constructor(
-    platform: Platform = quickjsPlatform,
     localUtils?: LocalUtils,
     instrumentation?: ClientInstrumentation,
     headers: HeadersArray = []
   ) {
-    super(platform);
+    super();
     this._instrumentation = instrumentation || createInstrumentation();
     this._localUtils = localUtils;
     this._rootObject = new Root(this);
     this.headers = headers;
+    this.registerObjectFactories({
+      Android: (parent, type, guid, init) => new Android(parent, type, guid, init),
+      AndroidDevice: (parent, type, guid, init) => new AndroidDevice(parent, type, guid, init),
+      AndroidSocket: (parent, type, guid, init) => new AndroidSocket(parent, type, guid, init),
+      APIRequestContext: (parent, type, guid, init) =>
+        new APIRequestContext(parent, type, guid, init),
+      Artifact: (parent, type, guid, init) => new Artifact(parent, type, guid, init),
+      BindingCall: (parent, type, guid, init) => new BindingCall(parent, type, guid, init),
+      Browser: (parent, type, guid, init) => new Browser(parent, type, guid, init),
+      BrowserContext: (parent, type, guid, init) => new BrowserContext(parent, type, guid, init),
+      BrowserType: (parent, type, guid, init) => new BrowserType(parent, type, guid, init),
+      CDPSession: (parent, type, guid, init) => new CDPSession(parent, type, guid, init),
+      Debugger: (parent, type, guid, init) => new Debugger(parent, type, guid, init),
+      Dialog: (parent, type, guid, init) => new Dialog(parent, type, guid, init),
+      Disposable: (parent, type, guid, init) => new DisposableObject(parent, type, guid, init),
+      Electron: (parent, type, guid, init) => new Electron(parent, type, guid, init),
+      ElectronApplication: (parent, type, guid, init) =>
+        new ElectronApplication(parent, type, guid, init),
+      ElementHandle: (parent, type, guid, init) => new ElementHandle(parent, type, guid, init),
+      Frame: (parent, type, guid, init) => new Frame(parent, type, guid, init),
+      JSHandle: (parent, type, guid, init) => new JSHandle(parent, type, guid, init),
+      JsonPipe: (parent, type, guid, init) => new JsonPipe(parent, type, guid, init),
+      LocalUtils: (parent, type, guid, init) => {
+        const result = new LocalUtils(parent, type, guid, init);
+        if (!this._localUtils) this._localUtils = result;
+        return result;
+      },
+      Page: (parent, type, guid, init) => new Page(parent, type, guid, init),
+      Playwright: (parent, type, guid, init) => new Playwright(parent, type, guid, init),
+      Request: (parent, type, guid, init) => new Request(parent, type, guid, init),
+      Response: (parent, type, guid, init) => new Response(parent, type, guid, init),
+      Route: (parent, type, guid, init) => new Route(parent, type, guid, init),
+      Stream: (parent, type, guid, init) => new Stream(parent, type, guid, init),
+      SocksSupport: (parent, type, guid, init) => new DummyChannelOwner(parent, type, guid, init),
+      Tracing: (parent, type, guid, init) => new Tracing(parent, type, guid, init),
+      WebSocket: (parent, type, guid, init) => new WebSocket(parent, type, guid, init),
+      WebSocketRoute: (parent, type, guid, init) => new WebSocketRoute(parent, type, guid, init),
+      Worker: (parent, type, guid, init) => new Worker(parent, type, guid, init),
+      WritableStream: (parent, type, guid, init) => new WritableStream(parent, type, guid, init),
+    });
+  }
+
+  registerObjectFactories(factories: Record<string, ChannelOwnerFactory>) {
+    for (const [type, factory] of Object.entries(factories))
+      this._objectFactories.set(type, factory);
   }
 
   markAsRemote() {
@@ -150,20 +210,28 @@ export class Connection extends EventEmitter {
       title?: string;
       internal?: boolean;
       frames?: channels.StackFrame[];
-      stepId?: string;
+      callId?: string;
+      signal?: AbortSignal;
+      timeout: number;
     }
   ): Promise<any> {
+    // Fire-and-forget: server intentionally never replies to __waitInfo__,
+    // so silently drop it after the connection is closed or the object was collected.
+    if (method === "__waitInfo__" && (this._closedError || object._wasCollected)) return;
     if (this._closedError) throw this._closedError;
     if (object._wasCollected)
       throw new Error("The object has been collected to prevent unbounded heap growth.");
 
+    const signal = options.signal;
+    if (signal?.aborted) throw new AbortError(undefined, { cause: signal.reason });
+
     const guid = object._guid;
     const type = object._type;
-    const id = ++this._lastId;
+    const id = options.callId ?? this._nextCallId();
     const message = { id, guid, method, params };
-    if (this._platform.isLogEnabled("channel")) {
+    if (debugLogger.isEnabled("channel")) {
       // Do not include metadata in debug logs to avoid noise.
-      this._platform.log("channel", "SEND> " + JSON.stringify(message));
+      debugLogger.log("channel", "SEND> " + JSON.stringify(message));
     }
     const location = options.frames?.[0]
       ? {
@@ -176,7 +244,7 @@ export class Connection extends EventEmitter {
       title: options.title,
       location,
       internal: options.internal,
-      stepId: options.stepId,
+      timeout: options.timeout,
     };
     if (this._tracingCount && options.frames && type !== "LocalUtils")
       this._localUtils
@@ -184,33 +252,58 @@ export class Connection extends EventEmitter {
         .catch(() => {});
     // We need to exit zones before calling into the server, otherwise
     // when we receive events from the server, we would be in an API zone.
-    this._platform.zones.empty.run(() => this.onmessage({ ...message, metadata }));
-    return await new Promise((resolve, reject) =>
-      this._callbacks.set(id, { resolve, reject, title: options.title, type, method })
-    );
+    emptyZone.run(() => this.onmessage({ ...message, metadata }));
+    // Fire-and-forget: server intentionally never replies to __waitInfo__.
+    if (method === "__waitInfo__") return;
+    let abortListener: (() => void) | undefined;
+    if (signal) {
+      abortListener = () => {
+        const reason =
+          signal.reason instanceof Error ? signal.reason.message : String(signal.reason);
+        emptyZone.run(() => this.onmessage({ guid, method: "__abort__", params: { id, reason } }));
+      };
+      signal.addEventListener("abort", abortListener, { once: true });
+    }
+    try {
+      return await new Promise((resolve, reject) =>
+        this._callbacks.set(id, { resolve, reject, signal, title: options.title, type, method })
+      );
+    } finally {
+      if (abortListener) signal!.removeEventListener("abort", abortListener);
+    }
   }
 
   private _validatorFromWireContext(): ValidatorContext {
     return {
       tChannelImpl: this._tChannelImplFromWire.bind(this),
       binary: this._rawBuffers ? "buffer" : "fromBase64",
-      isUnderTest: () => this._platform.isUnderTest(),
+      isUnderTest,
     };
   }
 
   dispatch(message: object) {
     if (this._closedError) return;
 
-    const { id, guid, method, params, result, error, log } = message as any;
+    const { id, guid, method, params, result, error, errorDetails, log } = message as any;
     if (id) {
-      if (this._platform.isLogEnabled("channel"))
-        this._platform.log("channel", "<RECV " + JSON.stringify(message));
+      if (debugLogger.isEnabled("channel"))
+        debugLogger.log("channel", "<RECV " + JSON.stringify(message));
       const callback = this._callbacks.get(id);
       if (!callback) throw new Error(`Cannot find command to respond: ${id}`);
       this._callbacks.delete(id);
       if (error && !result) {
         const parsedError = parseError(error);
-        rewriteErrorMessage(parsedError, parsedError.message + formatCallLog(this._platform, log));
+        if (callback.signal?.aborted && parsedError instanceof AbortError)
+          parsedError.cause = callback.signal.reason;
+        parsedError.log = log || [];
+        rewriteErrorMessage(parsedError, parsedError.message + formatCallLog(log));
+        const detailsValidator = maybeFindValidator(callback.type, callback.method, "ErrorDetails");
+        if (detailsValidator)
+          parsedError.details = detailsValidator(
+            errorDetails ?? {},
+            "",
+            this._validatorFromWireContext()
+          );
         callback.reject(parsedError);
       } else {
         const validator = findValidator(callback.type, callback.method, "Result");
@@ -219,8 +312,8 @@ export class Connection extends EventEmitter {
       return;
     }
 
-    if (this._platform.isLogEnabled("channel"))
-      this._platform.log("channel", "<EVENT " + JSON.stringify(message));
+    if (debugLogger.isEnabled("channel"))
+      debugLogger.log("channel", "<EVENT " + JSON.stringify(message));
     if (method === "__create__") {
       this._createRemoteObject(guid, params.type, params.guid, params.initializer);
       return;
@@ -277,118 +370,18 @@ export class Connection extends EventEmitter {
   ): any {
     const parent = this._objects.get(parentGuid);
     if (!parent) throw new Error(`Cannot find parent object ${parentGuid} to create ${guid}`);
-    let result: ChannelOwner<any>;
     const validator = findValidator(type, "", "Initializer");
     initializer = validator(initializer, "", this._validatorFromWireContext());
-    switch (type) {
-      case "Android":
-        result = new Android(parent, type, guid, initializer);
-        break;
-      case "AndroidSocket":
-        result = new AndroidSocket(parent, type, guid, initializer);
-        break;
-      case "AndroidDevice":
-        result = new AndroidDevice(parent, type, guid, initializer);
-        break;
-      case "APIRequestContext":
-        result = new APIRequestContext(parent, type, guid, initializer);
-        break;
-      case "Artifact":
-        result = new Artifact(parent, type, guid, initializer);
-        break;
-      case "BindingCall":
-        result = new BindingCall(parent, type, guid, initializer);
-        break;
-      case "Browser":
-        result = new Browser(parent, type, guid, initializer);
-        break;
-      case "BrowserContext":
-        result = new BrowserContext(parent, type, guid, initializer);
-        break;
-      case "BrowserType":
-        result = new BrowserType(parent, type, guid, initializer);
-        break;
-      case "CDPSession":
-        result = new CDPSession(parent, type, guid, initializer);
-        break;
-      case "Debugger":
-        result = new Debugger(parent, type, guid, initializer);
-        break;
-      case "Dialog":
-        result = new Dialog(parent, type, guid, initializer);
-        break;
-      case "Disposable":
-        result = new DisposableObject(parent, type, guid, initializer);
-        break;
-      case "Electron":
-        result = new Electron(parent, type, guid, initializer);
-        break;
-      case "ElectronApplication":
-        result = new ElectronApplication(parent, type, guid, initializer);
-        break;
-      case "ElementHandle":
-        result = new ElementHandle(parent, type, guid, initializer);
-        break;
-      case "Frame":
-        result = new Frame(parent, type, guid, initializer);
-        break;
-      case "JSHandle":
-        result = new JSHandle(parent, type, guid, initializer);
-        break;
-      case "JsonPipe":
-        result = new JsonPipe(parent, type, guid, initializer);
-        break;
-      case "LocalUtils":
-        result = new LocalUtils(parent, type, guid, initializer);
-        if (!this._localUtils) this._localUtils = result as LocalUtils;
-        break;
-      case "Page":
-        result = new Page(parent, type, guid, initializer);
-        break;
-      case "Playwright":
-        result = new Playwright(parent, type, guid, initializer);
-        break;
-      case "Request":
-        result = new Request(parent, type, guid, initializer);
-        break;
-      case "Response":
-        result = new Response(parent, type, guid, initializer);
-        break;
-      case "Route":
-        result = new Route(parent, type, guid, initializer);
-        break;
-      case "Stream":
-        result = new Stream(parent, type, guid, initializer);
-        break;
-      case "SocksSupport":
-        result = new DummyChannelOwner(parent, type, guid, initializer);
-        break;
-      case "Tracing":
-        result = new Tracing(parent, type, guid, initializer);
-        break;
-      case "WebSocket":
-        result = new WebSocket(parent, type, guid, initializer);
-        break;
-      case "WebSocketRoute":
-        result = new WebSocketRoute(parent, type, guid, initializer);
-        break;
-      case "Worker":
-        result = new Worker(parent, type, guid, initializer);
-        break;
-      case "WritableStream":
-        result = new WritableStream(parent, type, guid, initializer);
-        break;
-      default:
-        throw new Error("Missing type " + type);
-    }
-    return result;
+    const factory = this._objectFactories.get(type);
+    if (!factory) throw new Error("Missing type " + type);
+    return factory(parent, type, guid, initializer);
   }
 }
 
-function formatCallLog(platform: Platform, log: string[] | undefined): string {
+function formatCallLog(log: string[] | undefined): string {
   if (!log || !log.some((l) => !!l)) return "";
   return `
 Call log:
-${platform.colors.dim(log.join("\n"))}
+${colors.dim(log.join("\n"))}
 `;
 }

@@ -19,6 +19,7 @@ import {
 } from "../../temp-files.js";
 import { runScript } from "../script-runner-quickjs.js";
 import { ensureSandboxClientBundle } from "./bundle-test-helpers.js";
+import { startLocalTestSite } from "./local-test-site.js";
 
 const browserName = "sandbox-file-io";
 const INVALID_PATH_ERROR =
@@ -257,6 +258,75 @@ describe("QuickJS sandbox file I/O", () => {
       await page.setContent("<html><body><h1>Invalid</h1></body></html>");
       await page.screenshot({ path: "../escape.png" });
     `);
+  }, 120_000);
+
+  it("saves tracing.stop({ path }) into the controlled temp directory", async () => {
+    const requestedName = "sandbox trace?.zip";
+    const expectedPath = await resolveWebInteractTempPath(requestedName);
+    cleanupPaths.add(expectedPath);
+
+    await runSandboxScript(`
+      const page = await browser.getPage("file-io-trace");
+      await page.context().tracing.start({ snapshots: true });
+      await page.setContent("<html><body><h1>Trace</h1></body></html>");
+      await page.context().tracing.stop({ path: ${JSON.stringify(requestedName)} });
+    `);
+
+    const archive = await readFileFs(expectedPath);
+    expect(archive.subarray(0, 2).toString("latin1")).toBe("PK");
+  }, 120_000);
+
+  it("records tracing.startHar() into the controlled temp directory", async () => {
+    const requestedName = "sandbox network?.har";
+    const expectedPath = await resolveWebInteractTempPath(requestedName);
+    cleanupPaths.add(expectedPath);
+    const site = await startLocalTestSite();
+
+    try {
+      await runSandboxScript(`
+        const page = await browser.getPage("file-io-har");
+        await page.context().tracing.startHar(${JSON.stringify(requestedName)});
+        await page.goto(${JSON.stringify(site.url)});
+        await page.context().tracing.stopHar();
+      `);
+    } finally {
+      await site.close();
+    }
+
+    const har = JSON.parse(await readFileFs(expectedPath, "utf8")) as {
+      log: { entries: Array<{ request: { url: string } }> };
+    };
+    expect(har.log.entries.map((entry) => entry.request.url)).toContain(site.url);
+  }, 120_000);
+
+  it("rejects unsafe HAR paths", async () => {
+    await expectSandboxScriptToThrow(`
+      const page = await browser.getPage("file-io-invalid-har");
+      await page.context().tracing.startHar("../escape.har");
+    `);
+  }, 120_000);
+
+  it("uploads buffers but never reads host files for setInputFiles", async () => {
+    const output = await runSandboxScript(`
+      const page = await browser.getPage("file-io-upload");
+      await page.setContent('<input type="file">');
+      await page.setInputFiles("input", {
+        name: "hello.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from(new Uint8Array([104, 105])),
+      });
+      console.log(JSON.stringify(await page.$eval("input", (input) => input.files[0].name)));
+    `);
+    expect(parseLastJsonLine<string>(output)).toBe("hello.txt");
+
+    await expectSandboxScriptToThrow(
+      `
+        const page = await browser.getPage("file-io-upload-host-path");
+        await page.setContent('<input type="file">');
+        await page.setInputFiles("input", "/etc/hosts");
+      `,
+      /not available in the QuickJS sandbox/
+    );
   }, 120_000);
 
   it("rejects symlinked temp-file targets", async () => {

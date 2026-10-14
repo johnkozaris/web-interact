@@ -17,22 +17,17 @@
 
 import { evaluationScript } from "./clientHelper";
 import { setTestIdAttribute } from "./locator";
+import { kNoTimeout } from "./timeoutSettings";
 
 import type { SelectorEngine } from "./types";
 import type * as api from "../../types/types";
 import type * as channels from "../protocol/channels";
 import type { BrowserContext } from "./browserContext";
-import type { Platform } from "./platform";
 
 export class Selectors implements api.Selectors {
-  private _platform: Platform;
   private _selectorEngines: channels.SelectorEngine[] = [];
   private _testIdAttributeName: string | undefined;
   readonly _contextsForSelectors = new Set<BrowserContext>();
-
-  constructor(platform: Platform) {
-    this._platform = platform;
-  }
 
   async register(
     name: string,
@@ -42,10 +37,10 @@ export class Selectors implements api.Selectors {
     if (this._selectorEngines.some((engine) => engine.name === name))
       throw new Error(`selectors.register: "${name}" selector engine has been already registered`);
 
-    const source = await evaluationScript(this._platform, script, undefined, false);
+    const source = await evaluationScript(script, undefined, false);
     const selectorEngine: channels.SelectorEngine = { ...options, name, source };
     for (const context of this._contextsForSelectors)
-      await context._channel.registerSelectorEngine({ selectorEngine });
+      await context._channel.registerSelectorEngine({ selectorEngine }, kNoTimeout);
     this._selectorEngines.push(selectorEngine);
   }
 
@@ -55,7 +50,7 @@ export class Selectors implements api.Selectors {
     for (const context of this._contextsForSelectors) {
       context._options.testIdAttributeName = attributeName;
       context._channel
-        .setTestIdAttributeName({ testIdAttributeName: attributeName })
+        .setTestIdAttributeName({ testIdAttributeName: attributeName }, kNoTimeout)
         .catch(() => {});
     }
   }

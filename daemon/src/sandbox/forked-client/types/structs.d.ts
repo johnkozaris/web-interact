@@ -27,34 +27,41 @@ export type EvaluationArgument = {};
 
 export type NoHandles<Arg> = Arg extends JSHandle
   ? never
-  : Arg extends object
-    ? { [Key in keyof Arg]: NoHandles<Arg[Key]> }
-    : Arg;
+  : Arg extends (...args: infer T) => PromiseLike<infer U>
+    ? (...args: T) => Promise<NoHandles<U>>
+    : Arg extends (...args: infer T) => infer R
+      ? (...args: T) => NoHandles<R>
+      : Arg extends object
+        ? { [Key in keyof Arg]: NoHandles<Arg[Key]> }
+        : Arg;
 export type Unboxed<Arg> =
   Arg extends ElementHandle<infer T>
     ? T
     : Arg extends JSHandle<infer T>
       ? T
-      : Arg extends NoHandles<Arg>
-        ? Arg
-        : Arg extends [infer A0]
-          ? [Unboxed<A0>]
-          : Arg extends [infer A0, infer A1]
-            ? [Unboxed<A0>, Unboxed<A1>]
-            : Arg extends [infer A0, infer A1, infer A2]
-              ? [Unboxed<A0>, Unboxed<A1>, Unboxed<A2>]
-              : Arg extends [infer A0, infer A1, infer A2, infer A3]
-                ? [Unboxed<A0>, Unboxed<A1>, Unboxed<A2>, Unboxed<A3>]
-                : Arg extends Array<infer T>
-                  ? Array<Unboxed<T>>
-                  : Arg extends object
-                    ? { [Key in keyof Arg]: Unboxed<Arg[Key]> }
-                    : Arg;
+      : Arg extends (...args: infer T) => PromiseLike<infer U>
+        ? (...args: T) => Promise<Unboxed<U>>
+        : Arg extends (...args: infer T) => infer R
+          ? (...args: T) => Unboxed<R>
+          : Arg extends NoHandles<Arg>
+            ? Arg
+            : Arg extends [infer A0]
+              ? [Unboxed<A0>]
+              : Arg extends [infer A0, infer A1]
+                ? [Unboxed<A0>, Unboxed<A1>]
+                : Arg extends [infer A0, infer A1, infer A2]
+                  ? [Unboxed<A0>, Unboxed<A1>, Unboxed<A2>]
+                  : Arg extends [infer A0, infer A1, infer A2, infer A3]
+                    ? [Unboxed<A0>, Unboxed<A1>, Unboxed<A2>, Unboxed<A3>]
+                    : Arg extends Array<infer T>
+                      ? Array<Unboxed<T>>
+                      : Arg extends object
+                        ? { [Key in keyof Arg]: Unboxed<Arg[Key]> }
+                        : Arg;
 export type PageFunction0<R> = string | (() => R | Promise<R>);
 export type PageFunction<Arg, R> = string | ((arg: Unboxed<Arg>) => R | Promise<R>);
 export type PageFunctionOn<On, Arg2, R> =
-  | string
-  | ((on: On, arg2: Unboxed<Arg2>) => R | Promise<R>);
+  string | ((on: On, arg2: Unboxed<Arg2>) => R | Promise<R>);
 export type SmartHandle<T> = [T] extends [Node] ? ElementHandle<T> : JSHandle<T>;
 export type ElementHandleForTag<K extends keyof HTMLElementTagNameMap> = ElementHandle<
   HTMLElementTagNameMap[K]

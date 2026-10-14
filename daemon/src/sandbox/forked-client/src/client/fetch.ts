@@ -1,22 +1,94 @@
 // @ts-nocheck
-import { toClientCertificatesProtocol } from "./browserContext";
-import { ChannelOwner } from "./channelOwner";
-import { isTargetClosedError, TargetClosedError } from "./errors";
-import { RawHeaders } from "./network";
-import { Tracing } from "./tracing";
+/**
+ * Copyright (c) Microsoft Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import * as fs from "fs";
+import path from "path";
+import { inspect } from "util";
+
 import { assert } from "../utils/isomorphic/assert";
-import { readTempFile, writeTempFile } from "./fileUtils";
 import { headersObjectToArray } from "../utils/isomorphic/headers";
 import { isString } from "../utils/isomorphic/rtti";
-import { TimeoutSettings } from "./timeoutSettings";
+import { toClientCertificatesProtocol, toHttpCredentialsProtocol } from "./browserContext";
+import { ChannelOwner } from "./channelOwner";
+import { TargetClosedError, isTargetClosedError } from "./errors";
+import { RawHeaders, toClearCookiesParams } from "./network";
+import { Tracing } from "./tracing";
+import { readTempFile, writeTempFile } from "./fileUtils";
+import { TimeoutSettings, kNoTimeout } from "./timeoutSettings";
 
-export class APIRequest {
-  constructor(playwright) {
-    this._contexts = new Set();
+import type { Playwright } from "./playwright";
+import type {
+  ClearNetworkCookieOptions,
+  NetworkCookie,
+  ResourceTiming,
+  SetNetworkCookieParam,
+} from "./network";
+import type {
+  ClientCertificate,
+  FilePayload,
+  Headers,
+  RemoteAddr,
+  SecurityDetails,
+  SetStorageState,
+  StorageState,
+  TimeoutOptions,
+} from "./types";
+import type { HttpCredentials } from "../protocol/structs";
+import type { Serializable } from "../../types/structs";
+import type * as api from "../../types/types";
+import type { HeadersArray, NameValue } from "../utils/isomorphic/types";
+import type * as channels from "../protocol/channels";
+
+export type FetchOptions = {
+  params?: { [key: string]: string | number | boolean } | URLSearchParams | string;
+  method?: string;
+  headers?: Headers;
+  data?: string | Buffer | Serializable;
+  form?: { [key: string]: string | number | boolean } | FormData;
+  multipart?: { [key: string]: string | number | boolean | fs.ReadStream | FilePayload } | FormData;
+  timeout?: number;
+  signal?: AbortSignal;
+  failOnStatusCode?: boolean;
+  ignoreHTTPSErrors?: boolean;
+  maxRedirects?: number;
+  maxRetries?: number;
+};
+
+export type NewContextOptions = Omit<
+  channels.PlaywrightNewRequestOptions,
+  "extraHTTPHeaders" | "clientCertificates" | "storageState" | "tracesDir" | "httpCredentials"
+> & {
+  extraHTTPHeaders?: Headers;
+  storageState?: string | SetStorageState;
+  clientCertificates?: ClientCertificate[];
+  httpCredentials?: HttpCredentials | HttpCredentials[];
+};
+
+type RequestWithBodyOptions = Omit<FetchOptions, "method">;
+
+export class APIRequest implements api.APIRequest {
+  private _playwright: Playwright;
+  readonly _contexts = new Set<APIRequestContext>();
+
+  constructor(playwright: Playwright) {
     this._playwright = playwright;
   }
 
-  async newContext(options = {}) {
+  async newContext(options: NewContextOptions & TimeoutOptions = {}): Promise<APIRequestContext> {
     options = { ...options };
     await this._playwright._instrumentation.runBeforeCreateRequestContext(options);
     const storageState =
@@ -25,18 +97,19 @@ export class APIRequest {
         : options.storageState;
     const context = APIRequestContext.from(
       (
-        await this._playwright._channel.newRequest({
-          ...options,
-          extraHTTPHeaders: options.extraHTTPHeaders
-            ? headersObjectToArray(options.extraHTTPHeaders)
-            : undefined,
-          storageState,
-          tracesDir: this._playwright._defaultLaunchOptions?.tracesDir,
-          clientCertificates: await toClientCertificatesProtocol(
-            this._playwright._platform,
-            options.clientCertificates
-          ),
-        })
+        await this._playwright._channel.newRequest(
+          {
+            ...options,
+            extraHTTPHeaders: options.extraHTTPHeaders
+              ? headersObjectToArray(options.extraHTTPHeaders)
+              : undefined,
+            storageState,
+            tracesDir: this._playwright._defaultLaunchOptions?.tracesDir, // We do not expose tracesDir in the API, so do not allow options to accidentally override it.
+            clientCertificates: await toClientCertificatesProtocol(options.clientCertificates),
+            httpCredentials: toHttpCredentialsProtocol(options.httpCredentials),
+          },
+          kNoTimeout
+        )
       ).request
     );
     this._contexts.add(context);
@@ -44,78 +117,124 @@ export class APIRequest {
     context._timeoutSettings.setDefaultTimeout(
       options.timeout ?? this._playwright._defaultContextTimeout
     );
-    context._tracing._tracesDir = this._playwright._defaultLaunchOptions?.tracesDir;
+    context.tracing._tracesDir = this._playwright._defaultLaunchOptions?.tracesDir;
     await context._instrumentation.runAfterCreateRequestContext(context);
     return context;
   }
 }
 
-export class APIRequestContext extends ChannelOwner {
-  static from(channel) {
-    return channel?._object;
+export class APIRequestContext
+  extends ChannelOwner<channels.APIRequestContextChannel>
+  implements api.APIRequestContext
+{
+  _request?: APIRequest;
+  readonly tracing: Tracing;
+  private _closeReason: string | undefined;
+  _timeoutSettings: TimeoutSettings;
+
+  static from(channel: channels.APIRequestContextChannel): APIRequestContext {
+    return (channel as any)._object;
   }
 
-  constructor(parent, type, guid, initializer) {
+  constructor(
+    parent: ChannelOwner,
+    type: string,
+    guid: string,
+    initializer: channels.APIRequestContextInitializer
+  ) {
     super(parent, type, guid, initializer);
-    this._tracing = Tracing.from(initializer.tracing);
-    this._timeoutSettings = new TimeoutSettings(this._platform);
+    this.tracing = Tracing.from(initializer.tracing);
+    this._timeoutSettings = new TimeoutSettings();
   }
 
   async [Symbol.asyncDispose]() {
     await this.dispose();
   }
 
-  async dispose(options = {}) {
+  async dispose(options: { reason?: string } = {}): Promise<void> {
     this._closeReason = options.reason;
     await this._instrumentation.runBeforeCloseRequestContext(this);
+    await this.tracing._exportAllHars();
     try {
-      await this._channel.dispose(options);
-    } catch (error) {
-      if (isTargetClosedError(error)) {
-        return;
-      }
-      throw error;
+      await this._channel.dispose(options, kNoTimeout);
+    } catch (e) {
+      if (isTargetClosedError(e)) return;
+      throw e;
     }
-    this._tracing._resetStackCounter();
+    this.tracing._resetStackCounter();
     this._request?._contexts.delete(this);
   }
 
-  async delete(url, options) {
-    return await this.fetch(url, { ...options, method: "DELETE" });
+  async cookies(urls?: string | string[]): Promise<NetworkCookie[]> {
+    if (!urls) urls = [];
+    if (typeof urls === "string") urls = [urls];
+    return (await this._channel.cookies({ urls }, kNoTimeout)).cookies;
   }
 
-  async head(url, options) {
-    return await this.fetch(url, { ...options, method: "HEAD" });
+  async addCookies(cookies: SetNetworkCookieParam[]): Promise<void> {
+    await this._channel.addCookies({ cookies }, kNoTimeout);
   }
 
-  async get(url, options) {
-    return await this.fetch(url, { ...options, method: "GET" });
+  async clearCookies(options: ClearNetworkCookieOptions = {}): Promise<void> {
+    await this._channel.clearCookies(toClearCookiesParams(options), kNoTimeout);
   }
 
-  async patch(url, options) {
-    return await this.fetch(url, { ...options, method: "PATCH" });
+  async delete(url: string, options?: RequestWithBodyOptions): Promise<APIResponse> {
+    return await this.fetch(url, {
+      ...options,
+      method: "DELETE",
+    });
   }
 
-  async post(url, options) {
-    return await this.fetch(url, { ...options, method: "POST" });
+  async head(url: string, options?: RequestWithBodyOptions): Promise<APIResponse> {
+    return await this.fetch(url, {
+      ...options,
+      method: "HEAD",
+    });
   }
 
-  async put(url, options) {
-    return await this.fetch(url, { ...options, method: "PUT" });
+  async get(url: string, options?: RequestWithBodyOptions): Promise<APIResponse> {
+    return await this.fetch(url, {
+      ...options,
+      method: "GET",
+    });
   }
 
-  async fetch(urlOrRequest, options = {}) {
+  async patch(url: string, options?: RequestWithBodyOptions): Promise<APIResponse> {
+    return await this.fetch(url, {
+      ...options,
+      method: "PATCH",
+    });
+  }
+
+  async post(url: string, options?: RequestWithBodyOptions): Promise<APIResponse> {
+    return await this.fetch(url, {
+      ...options,
+      method: "POST",
+    });
+  }
+
+  async put(url: string, options?: RequestWithBodyOptions): Promise<APIResponse> {
+    return await this.fetch(url, {
+      ...options,
+      method: "PUT",
+    });
+  }
+
+  async fetch(
+    urlOrRequest: string | api.Request,
+    options: FetchOptions = {}
+  ): Promise<APIResponse> {
     const url = isString(urlOrRequest) ? urlOrRequest : undefined;
     const request = isString(urlOrRequest) ? undefined : urlOrRequest;
     return await this._innerFetch({ url, request, ...options });
   }
 
-  async _innerFetch(options = {}) {
+  async _innerFetch(
+    options: FetchOptions & { url?: string; request?: api.Request } = {}
+  ): Promise<APIResponse> {
     return await this._wrapApiCall(async () => {
-      if (this._closeReason) {
-        throw new TargetClosedError(this._closeReason);
-      }
-
+      if (this._closeReason) throw new TargetClosedError(this._closeReason);
       assert(
         options.request || typeof options.url === "string",
         "First argument must be either URL string or Request"
@@ -125,42 +244,33 @@ export class APIRequestContext extends ChannelOwner {
           (options.form === undefined ? 0 : 1) +
           (options.multipart === undefined ? 0 : 1) <=
           1,
-        "Only one of 'data', 'form' or 'multipart' can be specified"
+        `Only one of 'data', 'form' or 'multipart' can be specified`
       );
       assert(
         options.maxRedirects === undefined || options.maxRedirects >= 0,
-        "'maxRedirects' must be greater than or equal to '0'"
+        `'maxRedirects' must be greater than or equal to '0'`
       );
       assert(
         options.maxRetries === undefined || options.maxRetries >= 0,
-        "'maxRetries' must be greater than or equal to '0'"
+        `'maxRetries' must be greater than or equal to '0'`
       );
-
-      const url = options.url !== undefined ? options.url : options.request.url();
-      this._checkUrlAllowed?.(url);
-
+      const url = options.url !== undefined ? options.url : options.request!.url();
       const method = options.method || options.request?.method();
       let encodedParams = undefined;
-      if (typeof options.params === "string") {
-        encodedParams = options.params;
-      } else if (options.params instanceof URLSearchParams) {
-        encodedParams = options.params.toString();
-      }
-
+      if (typeof options.params === "string") encodedParams = options.params;
+      else if (options.params instanceof URLSearchParams) encodedParams = options.params.toString();
+      // Cannot call allHeaders() here as the request may be paused inside route handler.
       const headersObj = options.headers || options.request?.headers();
       const headers = headersObj ? headersObjectToArray(headersObj) : undefined;
-      let jsonData;
-      let formData;
-      let multipartData;
-      let postDataBuffer;
-
+      let jsonData: any;
+      let formData: channels.NameValue[] | undefined;
+      let multipartData: channels.FormField[] | undefined;
+      let postDataBuffer: Buffer | undefined;
       if (options.data !== undefined) {
         if (isString(options.data)) {
-          if (isJsonContentType(headers)) {
+          if (isJsonContentType(headers))
             jsonData = isJsonParsable(options.data) ? options.data : JSON.stringify(options.data);
-          } else {
-            postDataBuffer = Buffer.from(options.data, "utf8");
-          }
+          else postDataBuffer = Buffer.from(options.data, "utf8");
         } else if (Buffer.isBuffer(options.data)) {
           postDataBuffer = options.data;
         } else if (
@@ -170,17 +280,16 @@ export class APIRequestContext extends ChannelOwner {
         ) {
           jsonData = JSON.stringify(options.data);
         } else {
-          throw new Error("Unexpected 'data' type");
+          throw new Error(`Unexpected 'data' type`);
         }
       } else if (options.form) {
         if (globalThis.FormData && options.form instanceof FormData) {
           formData = [];
           for (const [name, value] of options.form.entries()) {
-            if (typeof value !== "string") {
+            if (typeof value !== "string")
               throw new Error(
                 `Expected string for options.form["${name}"], found File. Please use options.multipart instead.`
               );
-            }
             formData.push({ name, value });
           }
         } else {
@@ -194,7 +303,7 @@ export class APIRequestContext extends ChannelOwner {
             if (isString(value)) {
               multipartData.push({ name, value });
             } else {
-              const file = {
+              const file: ServerFilePayload = {
                 name: value.name,
                 mimeType: value.type,
                 buffer: Buffer.from(await value.arrayBuffer()),
@@ -203,44 +312,51 @@ export class APIRequestContext extends ChannelOwner {
             }
           }
         } else {
-          for (const [name, value] of Object.entries(options.multipart)) {
-            multipartData.push(await toFormField(this._platform, name, value));
-          }
+          // Convert file-like values to ServerFilePayload structs.
+          for (const [name, value] of Object.entries(options.multipart))
+            multipartData.push(await toFormField(name, value));
         }
       }
-
       if (
         postDataBuffer === undefined &&
         jsonData === undefined &&
         formData === undefined &&
         multipartData === undefined
-      ) {
+      )
         postDataBuffer = options.request?.postDataBuffer() || undefined;
-      }
-
-      const result = await this._channel.fetch({
-        url,
-        params: typeof options.params === "object" ? objectToArray(options.params) : undefined,
-        encodedParams,
-        method,
-        headers,
-        postData: postDataBuffer,
-        jsonData,
-        formData,
-        multipartData,
-        timeout: this._timeoutSettings.timeout(options),
-        failOnStatusCode: options.failOnStatusCode,
-        ignoreHTTPSErrors: options.ignoreHTTPSErrors,
-        maxRedirects: options.maxRedirects,
-        maxRetries: options.maxRetries,
-        __testHookLookup: options.__testHookLookup,
-      });
+      const fixtures = {
+        __testHookLookup: (options as any).__testHookLookup,
+      };
+      const result = await this._channel.fetch(
+        {
+          url,
+          params: typeof options.params === "object" ? objectToArray(options.params) : undefined,
+          encodedParams,
+          method,
+          headers,
+          postData: postDataBuffer,
+          jsonData,
+          formData,
+          multipartData,
+          failOnStatusCode: options.failOnStatusCode,
+          ignoreHTTPSErrors: options.ignoreHTTPSErrors,
+          maxRedirects: options.maxRedirects,
+          maxRetries: options.maxRetries,
+          ...fixtures,
+        },
+        this._timeoutSettings.timeout(options)
+      );
       return new APIResponse(this, result.response);
     });
   }
 
-  async storageState(options = {}) {
-    const state = await this._channel.storageState({ indexedDB: options.indexedDB });
+  async storageState(
+    options: { path?: string; indexedDB?: boolean; opfs?: boolean } = {}
+  ): Promise<StorageState> {
+    const state = await this._channel.storageState(
+      { indexedDB: options.indexedDB, opfs: options.opfs },
+      kNoTimeout
+    );
     if (options.path) {
       await writeTempFile(options.path, JSON.stringify(state, undefined, 2));
     }
@@ -248,122 +364,153 @@ export class APIRequestContext extends ChannelOwner {
   }
 }
 
-async function toFormField(platform, name, value) {
+async function toFormField(
+  name: string,
+  value: string | number | boolean | fs.ReadStream | FilePayload
+): Promise<channels.FormField> {
   const typeOfValue = typeof value;
   if (isFilePayload(value)) {
-    const payload = value;
-    if (!Buffer.isBuffer(payload.buffer)) {
+    const payload = value as FilePayload;
+    if (!Buffer.isBuffer(payload.buffer))
       throw new Error(`Unexpected buffer type of 'data.${name}'`);
-    }
     return { name, file: filePayloadToJson(payload) };
-  }
-  if (typeOfValue === "string" || typeOfValue === "number" || typeOfValue === "boolean") {
+  } else if (typeOfValue === "string" || typeOfValue === "number" || typeOfValue === "boolean") {
     return { name, value: String(value) };
+  } else {
+    return { name, file: await readStreamToJson(value as fs.ReadStream) };
   }
-  return { name, file: await readStreamToJson(platform, value) };
 }
 
-function isJsonParsable(value) {
-  if (typeof value !== "string") {
-    return false;
-  }
+function isJsonParsable(value: any) {
+  if (typeof value !== "string") return false;
   try {
     JSON.parse(value);
     return true;
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      return false;
-    }
-    throw error;
+  } catch (e) {
+    if (e instanceof SyntaxError) return false;
+    else throw e;
   }
 }
 
-export class APIResponse {
-  constructor(context, initializer) {
+export class APIResponse implements api.APIResponse {
+  private readonly _initializer: channels.APIResponse;
+  private readonly _headers: RawHeaders;
+  readonly _request: APIRequestContext;
+  _apiName = "APIResponse";
+
+  constructor(context: APIRequestContext, initializer: channels.APIResponse) {
     this._request = context;
     this._initializer = initializer;
     this._headers = new RawHeaders(this._initializer.headers);
-    if (context._platform.inspectCustom) {
-      this[context._platform.inspectCustom] = () => this._inspect();
-    }
+
+    if (inspect.custom) (this as any)[inspect.custom] = () => this._inspect();
   }
 
-  ok() {
+  ok(): boolean {
     return this._initializer.status >= 200 && this._initializer.status <= 299;
   }
 
-  url() {
+  url(): string {
     return this._initializer.url;
   }
 
-  status() {
+  status(): number {
     return this._initializer.status;
   }
 
-  statusText() {
+  statusText(): string {
     return this._initializer.statusText;
   }
 
-  headers() {
+  headers(): Headers {
     return this._headers.headers();
   }
 
-  headersArray() {
+  headersArray(): HeadersArray {
     return this._headers.headersArray();
   }
 
-  async body() {
-    return await this._request._wrapApiCall(async () => {
-      try {
-        const result = await this._request._channel.fetchResponseBody({
-          fetchUid: this._fetchUid(),
-        });
-        if (result.binary === undefined) {
-          throw new Error("Response has been disposed");
-        }
-        return result.binary;
-      } catch (error) {
-        if (isTargetClosedError(error)) {
-          throw new Error("Response has been disposed");
-        }
-        throw error;
-      }
-    }, { internal: true });
+  async securityDetails(): Promise<SecurityDetails | null> {
+    return this._initializer.securityDetails ?? null;
   }
 
-  async text() {
-    return (await this.body()).toString("utf8");
+  async serverAddr(): Promise<RemoteAddr | null> {
+    return this._initializer.serverAddr ?? null;
   }
 
-  async json() {
-    return JSON.parse(await this.text());
+  timing(): ResourceTiming {
+    return {
+      startTime: -1,
+      domainLookupStart: -1,
+      domainLookupEnd: -1,
+      connectStart: -1,
+      secureConnectionStart: -1,
+      connectEnd: -1,
+      requestStart: -1,
+      responseStart: -1,
+      ...this._initializer.timing,
+      responseEnd: this._initializer.responseEndTiming ?? -1,
+    };
+  }
+
+  async body(): Promise<Buffer> {
+    return await this._request._wrapApiCall(
+      async () => {
+        try {
+          const result = await this._request._channel.fetchResponseBody(
+            { fetchUid: this._fetchUid() },
+            kNoTimeout
+          );
+          if (result.binary === undefined) throw new Error("Response has been disposed");
+          return result.binary;
+        } catch (e) {
+          if (isTargetClosedError(e)) throw new Error("Response has been disposed");
+          throw e;
+        }
+      },
+      { internal: true }
+    );
+  }
+
+  async text(): Promise<string> {
+    const content = await this.body();
+    return content.toString("utf8");
+  }
+
+  async json(): Promise<any> {
+    const content = await this.text();
+    return JSON.parse(content);
   }
 
   async [Symbol.asyncDispose]() {
     await this.dispose();
   }
 
-  async dispose() {
-    await this._request._channel.disposeAPIResponse({ fetchUid: this._fetchUid() });
+  async dispose(): Promise<void> {
+    await this._request._channel.disposeAPIResponse({ fetchUid: this._fetchUid() }, kNoTimeout);
   }
 
-  _inspect() {
+  private _inspect() {
     const headers = this.headersArray().map(({ name, value }) => `  ${name}: ${value}`);
-    return `APIResponse: ${this.status()} ${this.statusText()}
-${headers.join("\n")}`;
+    return `APIResponse: ${this.status()} ${this.statusText()}\n${headers.join("\n")}`;
   }
 
-  _fetchUid() {
+  _fetchUid(): string {
     return this._initializer.fetchUid;
   }
 
-  async _fetchLog() {
-    const { log } = await this._request._channel.fetchLog({ fetchUid: this._fetchUid() });
+  async _fetchLog(): Promise<string[]> {
+    const { log } = await this._request._channel.fetchLog(
+      { fetchUid: this._fetchUid() },
+      kNoTimeout
+    );
     return log;
   }
 }
 
-function filePayloadToJson(payload) {
+type ServerFilePayload = NonNullable<channels.FormField["file"]>;
+
+function filePayloadToJson(payload: FilePayload): ServerFilePayload {
   return {
     name: payload.name,
     mimeType: payload.mimeType,
@@ -371,45 +518,39 @@ function filePayloadToJson(payload) {
   };
 }
 
-async function readStreamToJson(platform, stream) {
-  const buffer = await new Promise((resolve, reject) => {
-    const chunks = [];
-    stream.on("data", (chunk) => chunks.push(chunk));
+async function readStreamToJson(stream: fs.ReadStream): Promise<ServerFilePayload> {
+  const buffer = await new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on("data", (chunk) => chunks.push(chunk as Buffer));
     stream.on("end", () => resolve(Buffer.concat(chunks)));
-    stream.on("error", reject);
+    stream.on("error", (err) => reject(err));
   });
-  const streamPath = Buffer.isBuffer(stream.path) ? stream.path.toString("utf8") : stream.path;
+  const streamPath: string = Buffer.isBuffer(stream.path)
+    ? stream.path.toString("utf8")
+    : stream.path;
   return {
-    name: platform.path().basename(streamPath),
+    name: path.basename(streamPath),
     buffer,
   };
 }
 
-function isJsonContentType(headers) {
-  if (!headers) {
-    return false;
-  }
+function isJsonContentType(headers?: HeadersArray): boolean {
+  if (!headers) return false;
   for (const { name, value } of headers) {
-    if (name.toLocaleLowerCase() === "content-type") {
-      return value === "application/json";
-    }
+    if (name.toLocaleLowerCase() === "content-type") return value === "application/json";
   }
   return false;
 }
 
-function objectToArray(map) {
-  if (!map) {
-    return undefined;
-  }
+function objectToArray(map?: { [key: string]: any }): NameValue[] | undefined {
+  if (!map) return undefined;
   const result = [];
   for (const [name, value] of Object.entries(map)) {
-    if (value !== undefined) {
-      result.push({ name, value: String(value) });
-    }
+    if (value !== undefined) result.push({ name, value: String(value) });
   }
   return result;
 }
 
-function isFilePayload(value) {
-  return typeof value === "object" && value?.name && value?.mimeType && value?.buffer;
+function isFilePayload(value: any): boolean {
+  return typeof value === "object" && value["name"] && value["mimeType"] && value["buffer"];
 }

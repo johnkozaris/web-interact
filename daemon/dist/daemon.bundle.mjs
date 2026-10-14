@@ -6,66 +6,23 @@ var __export = (target, all) => {
 
 // src/daemon.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync5 } from "node:fs";
+import { existsSync as existsSync4 } from "node:fs";
 import { mkdir as mkdir3, unlink as unlink2, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os3 from "node:os";
-import path7 from "node:path";
-
-// src/patchright-workarounds.ts
-import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-var require2 = createRequire(import.meta.url);
-var currentDir = path.dirname(fileURLToPath(import.meta.url));
-var RUNTIME_PATCH_APPLIED = /* @__PURE__ */ Symbol.for("web-interact.patchright.runtime-enable.applied");
-var RUNTIME_SESSION_ENABLED = /* @__PURE__ */ Symbol.for("web-interact.patchright.runtime-enable.session");
-function applyPatchrightRuntimeEnableWorkaround() {
-  const chromiumInternals = require2(resolvePatchrightInternal(path.join("lib", "server", "chromium", "crConnection.js")));
-  const sessionPrototype = chromiumInternals.CRSession?.prototype;
-  if (!sessionPrototype || sessionPrototype[RUNTIME_PATCH_APPLIED]) {
-    return;
-  }
-  const originalSend = sessionPrototype.send;
-  sessionPrototype.send = async function patchedSend(method, params) {
-    const result = await originalSend.call(this, method, params);
-    if (method === "Page.enable" && !this[RUNTIME_SESSION_ENABLED]) {
-      this[RUNTIME_SESSION_ENABLED] = true;
-      try {
-        await originalSend.call(this, "Runtime.enable");
-      } catch {
-      }
-    }
-    return result;
-  };
-  sessionPrototype[RUNTIME_PATCH_APPLIED] = true;
-}
-function resolvePatchrightInternal(modulePath) {
-  const candidates = [
-    path.resolve(currentDir, "../node_modules/patchright-core", modulePath),
-    path.resolve(process.cwd(), "node_modules/patchright-core", modulePath)
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  throw new Error(`Could not locate Patchright internals at ${modulePath}`);
-}
-applyPatchrightRuntimeEnableWorkaround();
+import path6 from "node:path";
 
 // src/browser-manager.ts
-import { existsSync as existsSync2 } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import os2 from "node:os";
-import path3 from "node:path";
+import path2 from "node:path";
 import { chromium } from "patchright";
 
 // src/local-endpoint.ts
 import { readFileSync } from "node:fs";
 import os from "node:os";
-import path2 from "node:path";
+import path from "node:path";
 var WEB_INTERACT_HOME_ENV = "WEB_INTERACT_HOME";
 function sanitizePipeSegment(value) {
   const sanitized = value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
@@ -84,38 +41,82 @@ function getConfiguredDevBrowserBaseDir() {
       `${WEB_INTERACT_HOME_ENV} is set but empty. Set it to an absolute path or unset it.`
     );
   }
-  if (!path2.isAbsolute(configured)) {
+  if (!path.isAbsolute(configured)) {
     throw new Error(`${WEB_INTERACT_HOME_ENV} must be an absolute path. Got: ${configured}`);
   }
   return configured;
 }
 function getWebInteractBaseDir(homedir = os.homedir()) {
-  return getConfiguredDevBrowserBaseDir() ?? path2.join(homedir, ".web-interact");
+  return getConfiguredDevBrowserBaseDir() ?? path.join(homedir, ".web-interact");
 }
 function getDaemonEndpoint(options = {}) {
   const homedir = options.homedir ?? os.homedir();
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
-    const baseDir = getConfiguredDevBrowserBaseDir() ?? path2.win32.join(homedir, ".web-interact");
+    const baseDir = getConfiguredDevBrowserBaseDir() ?? path.win32.join(homedir, ".web-interact");
     return `\\\\.\\pipe\\web-interact-daemon-${sanitizePipeSegment(baseDir)}`;
   }
-  return path2.join(getWebInteractBaseDir(homedir), "daemon.sock");
+  return path.join(getWebInteractBaseDir(homedir), "daemon.sock");
 }
 function getPidPath(homedir = os.homedir()) {
-  return path2.join(getWebInteractBaseDir(homedir), "daemon.pid");
+  return path.join(getWebInteractBaseDir(homedir), "daemon.pid");
 }
 function getBrowsersDir(homedir = os.homedir()) {
-  return path2.join(getWebInteractBaseDir(homedir), "browsers");
+  return path.join(getWebInteractBaseDir(homedir), "browsers");
 }
 function requiresDaemonEndpointCleanup(platform = process.platform) {
   return platform !== "win32";
 }
 function readMode(homedir = os.homedir()) {
   try {
-    const content = readFileSync(path2.join(getWebInteractBaseDir(homedir), "mode"), "utf8").trim();
+    const content = readFileSync(path.join(getWebInteractBaseDir(homedir), "mode"), "utf8").trim();
     return content === "assistant" ? "assistant" : "default";
   } catch {
     return "default";
+  }
+}
+
+// src/patchright-workarounds.ts
+var RUNTIME_PATCH_APPLIED = /* @__PURE__ */ Symbol.for("web-interact.patchright.runtime-enable.applied");
+var RUNTIME_SESSION_ENABLED = /* @__PURE__ */ Symbol.for("web-interact.patchright.runtime-enable.session");
+function toServerImpl(clientObject) {
+  const toImpl = clientObject._connection?.toImpl;
+  return typeof toImpl === "function" ? toImpl(clientObject) : void 0;
+}
+async function enableRuntimeOnce(session) {
+  if (session[RUNTIME_SESSION_ENABLED]) {
+    return;
+  }
+  session[RUNTIME_SESSION_ENABLED] = true;
+  try {
+    await session.send("Runtime.enable");
+  } catch {
+  }
+}
+async function applyPatchrightRuntimeEnableWorkaround(browser, contexts = browser.contexts()) {
+  const rootSession = toServerImpl(browser)?._connection?.rootSession;
+  if (!rootSession) {
+    return;
+  }
+  const sessionPrototype = Object.getPrototypeOf(rootSession);
+  if (!sessionPrototype[RUNTIME_PATCH_APPLIED]) {
+    const originalSend = sessionPrototype.send;
+    sessionPrototype.send = async function patchedSend(method, params) {
+      const result = await originalSend.call(this, method, params);
+      if (method === "Page.enable") {
+        await enableRuntimeOnce(this);
+      }
+      return result;
+    };
+    sessionPrototype[RUNTIME_PATCH_APPLIED] = true;
+  }
+  for (const context of contexts) {
+    for (const page of context.pages()) {
+      const session = toServerImpl(page)?.delegate?._mainFrameSession?._client;
+      if (session) {
+        await enableRuntimeOnce(session);
+      }
+    }
   }
 }
 
@@ -126,14 +127,14 @@ function detectBrowserChannel() {
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
   ] : [];
-  if (chromePaths.some((p) => existsSync2(p))) {
+  if (chromePaths.some((p) => existsSync(p))) {
     return "chrome";
   }
   const edgePaths = platform === "darwin" ? ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"] : platform === "linux" ? ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable"] : platform === "win32" ? [
     "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
     "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
   ] : [];
-  if (edgePaths.some((p) => existsSync2(p))) {
+  if (edgePaths.some((p) => existsSync(p))) {
     return "msedge";
   }
   return void 0;
@@ -415,7 +416,7 @@ var BrowserManager = class {
     return entry;
   }
   async launchBrowser(name, headless, ignoreHTTPSErrors) {
-    const profileDir = path3.join(this.baseDir, name, "browser-profile");
+    const profileDir = path2.join(this.baseDir, name, "browser-profile");
     await this.dependencies.mkdir(profileDir, { recursive: true });
     const channel = detectBrowserChannel();
     const mode = this.dependencies.readMode();
@@ -441,6 +442,7 @@ var BrowserManager = class {
       await context.close();
       throw new Error(`Playwright did not expose a browser handle for "${name}"`);
     }
+    await applyPatchrightRuntimeEnableWorkaround(browser, [context]);
     const entry = {
       name,
       type: "launched",
@@ -460,6 +462,7 @@ var BrowserManager = class {
       isLocal: true
     });
     const contexts = browser.contexts();
+    await applyPatchrightRuntimeEnableWorkaround(browser, contexts);
     for (const browserContext of contexts) {
       browserContext.pages();
     }
@@ -547,7 +550,7 @@ var BrowserManager = class {
     switch (this.dependencies.platform) {
       case "darwin":
         return [
-          path3.join(
+          path2.join(
             homeDir,
             "Library",
             "Application Support",
@@ -555,14 +558,14 @@ var BrowserManager = class {
             "Chrome",
             "DevToolsActivePort"
           ),
-          path3.join(
+          path2.join(
             homeDir,
             "Library",
             "Application Support",
             "Microsoft Edge",
             "DevToolsActivePort"
           ),
-          path3.join(
+          path2.join(
             homeDir,
             "Library",
             "Application Support",
@@ -570,8 +573,8 @@ var BrowserManager = class {
             "Chrome Canary",
             "DevToolsActivePort"
           ),
-          path3.join(homeDir, "Library", "Application Support", "Chromium", "DevToolsActivePort"),
-          path3.join(
+          path2.join(homeDir, "Library", "Application Support", "Chromium", "DevToolsActivePort"),
+          path2.join(
             homeDir,
             "Library",
             "Application Support",
@@ -582,16 +585,16 @@ var BrowserManager = class {
         ];
       case "linux":
         return [
-          path3.join(homeDir, ".config", "google-chrome", "DevToolsActivePort"),
-          path3.join(homeDir, ".config", "microsoft-edge", "DevToolsActivePort"),
-          path3.join(homeDir, ".config", "chromium", "DevToolsActivePort"),
-          path3.join(homeDir, ".config", "google-chrome-beta", "DevToolsActivePort"),
-          path3.join(homeDir, ".config", "google-chrome-unstable", "DevToolsActivePort"),
-          path3.join(homeDir, ".config", "BraveSoftware", "Brave-Browser", "DevToolsActivePort")
+          path2.join(homeDir, ".config", "google-chrome", "DevToolsActivePort"),
+          path2.join(homeDir, ".config", "microsoft-edge", "DevToolsActivePort"),
+          path2.join(homeDir, ".config", "chromium", "DevToolsActivePort"),
+          path2.join(homeDir, ".config", "google-chrome-beta", "DevToolsActivePort"),
+          path2.join(homeDir, ".config", "google-chrome-unstable", "DevToolsActivePort"),
+          path2.join(homeDir, ".config", "BraveSoftware", "Brave-Browser", "DevToolsActivePort")
         ];
       case "win32":
         return [
-          path3.join(
+          path2.join(
             homeDir,
             "AppData",
             "Local",
@@ -600,7 +603,7 @@ var BrowserManager = class {
             "User Data",
             "DevToolsActivePort"
           ),
-          path3.join(
+          path2.join(
             homeDir,
             "AppData",
             "Local",
@@ -609,7 +612,7 @@ var BrowserManager = class {
             "User Data",
             "DevToolsActivePort"
           ),
-          path3.join(
+          path2.join(
             homeDir,
             "AppData",
             "Local",
@@ -618,7 +621,7 @@ var BrowserManager = class {
             "User Data",
             "DevToolsActivePort"
           ),
-          path3.join(
+          path2.join(
             homeDir,
             "AppData",
             "Local",
@@ -627,8 +630,8 @@ var BrowserManager = class {
             "User Data",
             "DevToolsActivePort"
           ),
-          path3.join(homeDir, "AppData", "Local", "Chromium", "User Data", "DevToolsActivePort"),
-          path3.join(
+          path2.join(homeDir, "AppData", "Local", "Chromium", "User Data", "DevToolsActivePort"),
+          path2.join(
             homeDir,
             "AppData",
             "Local",
@@ -1695,10 +1698,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path8) {
-  if (!path8)
+function getElementAtPath(obj, path7) {
+  if (!path7)
     return obj;
-  return path8.reduce((acc, key) => acc?.[key], obj);
+  return path7.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -2038,11 +2041,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path8, issues) {
+function prefixIssues(path7, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path8);
+    iss.path.unshift(path7);
     return iss;
   });
 }
@@ -2504,16 +2507,16 @@ function flattenError(error62, mapper = (issue2) => issue2.message) {
 }
 function formatError(error62, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error63, path8 = []) => {
+  const processError = (error63, path7 = []) => {
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path8, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -2552,17 +2555,17 @@ function formatError(error62, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error62, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error63, path8 = []) => {
+  const processError = (error63, path7 = []) => {
     var _a3;
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path8, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -2601,8 +2604,8 @@ function treeifyError(error62, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path8 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path8) {
+  const path7 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path7) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -19740,13 +19743,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path8 = ref.slice(1).split("/").filter(Boolean);
-  if (path8.length === 0) {
+  const path7 = ref.slice(1).split("/").filter(Boolean);
+  if (path7.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path8[0] === defsKey) {
-    const key = path8[1] === void 0 ? void 0 : decodeJSONPointerSegment(path8[1]);
+  if (path7[0] === defsKey) {
+    const key = path7[1] === void 0 ? void 0 : decodeJSONPointerSegment(path7[1]);
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -20665,8 +20668,8 @@ var ResponseSchema = external_exports.discriminatedUnion("type", [
 ]);
 function describeZodError(error62) {
   return error62.issues.map((issue2) => {
-    const path8 = issue2.path.length > 0 ? issue2.path.join(".") : "request";
-    return `${path8}: ${issue2.message}`;
+    const path7 = issue2.path.length > 0 ? issue2.path.join(".") : "request";
+    return `${path7}: ${issue2.message}`;
   }).join("; ");
 }
 function extractId(value) {
@@ -20705,10 +20708,10 @@ function serialize(message) {
 }
 
 // src/sandbox/quickjs-sandbox.ts
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync3 } from "node:fs";
 import { readFile as readFileFs } from "node:fs/promises";
-import path6 from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import path5 from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 import util from "node:util";
 
 // src/sandbox/dom/accessibility.ts
@@ -22266,11 +22269,11 @@ var CHECK_ELEMENT_SCRIPT = `
 // src/temp-files.ts
 import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync as readFileSync2 } from "node:fs";
 import { lstat, mkdir as mkdir2, open as open2, unlink } from "node:fs/promises";
-import path4 from "node:path";
+import path3 from "node:path";
 var SAFE_PATH_SEGMENT_PATTERN = /[^A-Za-z0-9._-]/g;
 var NOFOLLOW_FLAG = constants.O_NOFOLLOW ?? 0;
 var WEB_INTERACT_BASE_DIR = getWebInteractBaseDir();
-var WEB_INTERACT_TMP_DIR = path4.join(WEB_INTERACT_BASE_DIR, "tmp");
+var WEB_INTERACT_TMP_DIR = path3.join(WEB_INTERACT_BASE_DIR, "tmp");
 function requireNonEmptyString(value, label) {
   if (typeof value !== "string" || value.length === 0) {
     throw new TypeError(`${label} must be a non-empty string`);
@@ -22281,7 +22284,7 @@ function isWithinDirectory(rootDir, candidatePath) {
   if (candidatePath === rootDir) {
     return true;
   }
-  const rootWithSeparator = rootDir.endsWith(path4.sep) ? rootDir : `${rootDir}${path4.sep}`;
+  const rootWithSeparator = rootDir.endsWith(path3.sep) ? rootDir : `${rootDir}${path3.sep}`;
   return candidatePath.startsWith(rootWithSeparator);
 }
 function sanitizePathSegment(segment) {
@@ -22302,7 +22305,7 @@ function sanitizeRelativePath(fileName) {
   if (rawPath.includes("\0")) {
     throw new Error("File names must not contain null bytes");
   }
-  if (path4.posix.isAbsolute(rawPath) || path4.win32.isAbsolute(rawPath)) {
+  if (path3.posix.isAbsolute(rawPath) || path3.win32.isAbsolute(rawPath)) {
     throw new Error("Absolute paths are not allowed");
   }
   const normalized = rawPath.replace(/\\/g, "/");
@@ -22330,14 +22333,14 @@ function assertControlledDirectorySync(directoryPath, label) {
   }
 }
 async function assertSafeParentDirectories(rootDir, destinationPath, createParents) {
-  const relativeParent = path4.relative(rootDir, path4.dirname(destinationPath));
+  const relativeParent = path3.relative(rootDir, path3.dirname(destinationPath));
   if (relativeParent.length === 0) {
     return;
   }
-  const segments = relativeParent.split(path4.sep).filter((segment) => segment.length > 0);
+  const segments = relativeParent.split(path3.sep).filter((segment) => segment.length > 0);
   let currentPath = rootDir;
   for (const segment of segments) {
-    currentPath = path4.join(currentPath, segment);
+    currentPath = path3.join(currentPath, segment);
     if (createParents) {
       await mkdir2(currentPath, {
         recursive: true
@@ -22360,14 +22363,14 @@ async function assertSafeParentDirectories(rootDir, destinationPath, createParen
   }
 }
 function assertSafeParentDirectoriesSync(rootDir, destinationPath, createParents) {
-  const relativeParent = path4.relative(rootDir, path4.dirname(destinationPath));
+  const relativeParent = path3.relative(rootDir, path3.dirname(destinationPath));
   if (relativeParent.length === 0) {
     return;
   }
-  const segments = relativeParent.split(path4.sep).filter((segment) => segment.length > 0);
+  const segments = relativeParent.split(path3.sep).filter((segment) => segment.length > 0);
   let currentPath = rootDir;
   for (const segment of segments) {
-    currentPath = path4.join(currentPath, segment);
+    currentPath = path3.join(currentPath, segment);
     if (createParents) {
       mkdirSync(currentPath, {
         recursive: true
@@ -22430,7 +22433,7 @@ async function ensureWebInteractTempDir() {
     recursive: true
   });
   await assertControlledDirectory(WEB_INTERACT_TMP_DIR, "Web Interact temp directory");
-  return path4.resolve(WEB_INTERACT_TMP_DIR);
+  return path3.resolve(WEB_INTERACT_TMP_DIR);
 }
 function ensureWebInteractTempDirSync() {
   mkdirSync(WEB_INTERACT_BASE_DIR, {
@@ -22441,12 +22444,12 @@ function ensureWebInteractTempDirSync() {
     recursive: true
   });
   assertControlledDirectorySync(WEB_INTERACT_TMP_DIR, "Web Interact temp directory");
-  return path4.resolve(WEB_INTERACT_TMP_DIR);
+  return path3.resolve(WEB_INTERACT_TMP_DIR);
 }
 async function resolveWebInteractTempPath(fileName, options = {}) {
   const rootDir = await ensureWebInteractTempDir();
   const segments = sanitizeRelativePath(fileName);
-  const destinationPath = path4.resolve(rootDir, ...segments);
+  const destinationPath = path3.resolve(rootDir, ...segments);
   if (!isWithinDirectory(rootDir, destinationPath)) {
     throw new Error("Resolved temp file path escapes the controlled temp directory");
   }
@@ -22456,7 +22459,7 @@ async function resolveWebInteractTempPath(fileName, options = {}) {
 function resolveWebInteractTempPathSync(fileName, options = {}) {
   const rootDir = ensureWebInteractTempDirSync();
   const segments = sanitizeRelativePath(fileName);
-  const destinationPath = path4.resolve(rootDir, ...segments);
+  const destinationPath = path3.resolve(rootDir, ...segments);
   if (!isWithinDirectory(rootDir, destinationPath)) {
     throw new Error("Resolved temp file path escapes the controlled temp directory");
   }
@@ -22542,37 +22545,27 @@ async function deleteWebInteractTempFile(fileName) {
 }
 
 // src/sandbox/playwright-internals.ts
-import { existsSync as existsSync3 } from "node:fs";
-import { createRequire as createRequire2 } from "node:module";
-import path5 from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-var require3 = createRequire2(import.meta.url);
-var currentDir2 = path5.dirname(fileURLToPath2(import.meta.url));
+import { existsSync as existsSync2 } from "node:fs";
+import { createRequire } from "node:module";
+import path4 from "node:path";
+import { fileURLToPath } from "node:url";
+var require2 = createRequire(import.meta.url);
+var currentDir = path4.dirname(fileURLToPath(import.meta.url));
 function resolvePlaywrightInternal(modulePath) {
   const candidates = [
-    path5.resolve(currentDir2, "../../node_modules/patchright-core", modulePath),
-    path5.resolve(currentDir2, "node_modules/patchright-core", modulePath),
-    path5.resolve(process.cwd(), "node_modules/patchright-core", modulePath)
+    path4.resolve(currentDir, "../../node_modules/patchright-core", modulePath),
+    path4.resolve(currentDir, "node_modules/patchright-core", modulePath),
+    path4.resolve(process.cwd(), "node_modules/patchright-core", modulePath)
   ];
   for (const candidate of candidates) {
-    if (existsSync3(candidate)) {
+    if (existsSync2(candidate)) {
       return candidate;
     }
   }
   throw new Error(`Could not locate Playwright internals at ${modulePath}`);
 }
-var serverInternals = require3(
-  resolvePlaywrightInternal(path5.join("lib", "server", "index.js"))
-);
-var clientInternals = require3(
-  resolvePlaywrightInternal(path5.join("lib", "client", "connection.js"))
-);
-var nodePlatformInternals = require3(
-  resolvePlaywrightInternal(path5.join("lib", "server", "utils", "nodePlatform.js"))
-);
-var { createPlaywright, DispatcherConnection, RootDispatcher, PlaywrightDispatcher } = serverInternals;
-var { Connection } = clientInternals;
-var { nodePlatform } = nodePlatformInternals;
+var coreBundle = require2(resolvePlaywrightInternal(path4.join("lib", "coreBundle.js")));
+var { createPlaywright, DispatcherConnection, RootDispatcher, PlaywrightDispatcher } = coreBundle.server;
 
 // src/sandbox/host-bridge.ts
 var HostBridge = class {
@@ -23164,11 +23157,11 @@ var DEFAULT_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024;
 var WAIT_FOR_OBJECT_ATTEMPTS = 1e3;
 function findBundlePath() {
   const candidates = [
-    fileURLToPath3(new URL("./sandbox-client.js", import.meta.url)),
-    fileURLToPath3(new URL("../../dist/sandbox-client.js", import.meta.url))
+    fileURLToPath2(new URL("./sandbox-client.js", import.meta.url)),
+    fileURLToPath2(new URL("../../dist/sandbox-client.js", import.meta.url))
   ];
   for (const p of candidates) {
-    if (existsSync4(p)) return p;
+    if (existsSync3(p)) return p;
   }
   throw new Error(
     `Failed to find sandbox-client.js. Searched:
@@ -23237,8 +23230,8 @@ function normalizeSandboxModuleSpecifier(baseModuleName, requestedName) {
     );
   }
   const baseReference = baseModuleName.length > 0 ? `/${baseModuleName}` : "/user-script.js";
-  const normalized = path6.posix.normalize(
-    specifier.startsWith("/") ? specifier : path6.posix.join(path6.posix.dirname(baseReference), specifier)
+  const normalized = path5.posix.normalize(
+    specifier.startsWith("/") ? specifier : path5.posix.join(path5.posix.dirname(baseReference), specifier)
   );
   if (normalized === "/" || normalized.endsWith("/")) {
     throw new Error(`Module specifier must resolve to a file: ${specifier}`);
@@ -23311,7 +23304,7 @@ function requireString(value, label) {
   }
   return value;
 }
-function toServerImpl(clientObject, label) {
+function toServerImpl2(clientObject, label) {
   const connection = clientObject._connection;
   const toImpl = connection?.toImpl;
   if (typeof toImpl !== "function") {
@@ -23324,7 +23317,7 @@ function toServerImpl(clientObject, label) {
   return impl;
 }
 function extractGuid(page) {
-  const guid3 = toServerImpl(page, "Playwright page").guid;
+  const guid3 = toServerImpl2(page, "Playwright page").guid;
   if (typeof guid3 !== "string" || guid3.length === 0) {
     throw new Error("Playwright page did not expose a guid");
   }
@@ -23562,7 +23555,7 @@ return __PlaywrightClient;`);
             });
           }
         },
-        preLaunchedBrowser: toServerImpl(browserEntry.browser, "Playwright browser"),
+        preLaunchedBrowser: toServerImpl2(browserEntry.browser, "Playwright browser"),
         sharedBrowser: true,
         denyLaunch: true
       });
@@ -23595,7 +23588,7 @@ return __PlaywrightClient;`);
             }
 
             const playwrightClient = createPlaywrightClient();
-            const connection = new playwrightClient.Connection(playwrightClient.quickjsPlatform);
+            const connection = new playwrightClient.Connection();
             connection.onmessage = (message) => {
               transportSend(JSON.stringify(message));
             };
@@ -24393,8 +24386,8 @@ var PID_PATH = getPidPath();
 var BROWSERS_DIR = getBrowsersDir();
 var DEFAULT_SCRIPT_TIMEOUT_MS = 2e4;
 var SOCKET_CLOSE_TIMEOUT_MS = 500;
-var PLAYWRIGHT_VERSION = "1.59.1";
-var PATCHRIGHT_VERSION = "1.59.1";
+var PLAYWRIGHT_VERSION = "1.64.1";
+var PATCHRIGHT_VERSION = "1.64.0";
 var QUICKJS_VERSION = "0.32.0";
 function buildRuntimePackageJson() {
   const mode = readMode();
@@ -24554,7 +24547,7 @@ async function handleInstall(socket, request) {
     const output2 = createMessageQueue(socket);
     try {
       await mkdir3(BASE_DIR, { recursive: true });
-      await writeFile(path7.join(BASE_DIR, "package.json"), buildRuntimePackageJson());
+      await writeFile(path6.join(BASE_DIR, "package.json"), buildRuntimePackageJson());
       await runPackageManagerCommand(output2, request.id, ["install", "--ignore-scripts"], BASE_DIR);
       if (!systemBrowserExists()) {
         const mode = readMode();
@@ -24680,7 +24673,7 @@ function systemBrowserPaths() {
   }
   if (platform === "win32") {
     return [
-      path7.win32.join(home, "AppData", "Local", "Google", "Chrome", "Application", "chrome.exe"),
+      path6.win32.join(home, "AppData", "Local", "Google", "Chrome", "Application", "chrome.exe"),
       "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
       "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
       "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -24690,7 +24683,7 @@ function systemBrowserPaths() {
   return [];
 }
 function systemBrowserExists() {
-  return systemBrowserPaths().some((p) => existsSync5(p));
+  return systemBrowserPaths().some((p) => existsSync4(p));
 }
 async function handleRequest(socket, line) {
   const parsed = parseRequest(line);

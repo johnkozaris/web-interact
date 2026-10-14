@@ -15,21 +15,39 @@
  * limitations under the License.
  */
 
-import { parseSerializedValue, serializeValue } from "../protocol/serializers";
 import { isError } from "../utils/isomorphic/rtti";
+import {
+  parseSerializedValue,
+  serializeValue,
+  systemErrorCode,
+  systemErrorMessage,
+} from "../protocol/serializers";
 
 import type { SerializedError } from "../protocol/channels";
 
-export class TimeoutError extends Error {
+export class PlaywrightError extends Error {
+  log: string[] = [];
+  details?: any; // As declared in the protocol.
+}
+
+export class TimeoutError extends PlaywrightError {
   constructor(message: string) {
     super(message);
     this.name = "TimeoutError";
   }
 }
 
-export class TargetClosedError extends Error {
+export class TargetClosedError extends PlaywrightError {
   constructor(cause?: string) {
     super(cause || "Target page, context or browser has been closed");
+  }
+}
+
+// mirrors https://github.com/nodejs/node/blob/4e7c07dfe2b253393702545c0ffe2712b21fd3dd/lib/internal/errors.js#L976-L988
+export class AbortError extends PlaywrightError {
+  constructor(message = "The operation was aborted", options?: ErrorOptions) {
+    super(message, options);
+    this.name = "AbortError";
   }
 }
 
@@ -38,28 +56,30 @@ export function isTargetClosedError(error: Error) {
 }
 
 export function serializeError(e: any): SerializedError {
-  if (isError(e)) return { error: { message: e.message, stack: e.stack, name: e.name } };
+  if (isError(e))
+    return {
+      error: {
+        message: systemErrorMessage(e),
+        stack: e.stack,
+        name: e.name,
+        code: systemErrorCode(e),
+      },
+    };
   return { value: serializeValue(e, (value) => ({ fallThrough: value })) };
 }
 
-export function parseError(error: SerializedError): Error {
+export function parseError(error: SerializedError): PlaywrightError {
   if (!error.error) {
     if (error.value === undefined)
       throw new Error("Serialized error must have either an error or a value");
     return parseSerializedValue(error.value, undefined);
   }
-  if (error.error.name === "TimeoutError") {
-    const e = new TimeoutError(error.error.message);
-    e.stack = error.error.stack || "";
-    return e;
-  }
-  if (error.error.name === "TargetClosedError") {
-    const e = new TargetClosedError(error.error.message);
-    e.stack = error.error.stack || "";
-    return e;
-  }
-  const e = new Error(error.error.message);
+  let e: PlaywrightError;
+  if (error.error.name === "TimeoutError") e = new TimeoutError(error.error.message);
+  else if (error.error.name === "TargetClosedError") e = new TargetClosedError(error.error.message);
+  else if (error.error.name === "AbortError") e = new AbortError(error.error.message);
+  else e = Object.assign(new PlaywrightError(error.error.message), { name: error.error.name });
   e.stack = error.error.stack || "";
-  e.name = error.error.name;
+  if (error.error.code !== undefined) (e as any).code = error.error.code;
   return e;
 }

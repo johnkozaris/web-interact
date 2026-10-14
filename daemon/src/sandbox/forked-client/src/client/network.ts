@@ -15,22 +15,28 @@
  * limitations under the License.
  */
 
-import { ChannelOwner } from "./channelOwner";
-import { isTargetClosedError } from "./errors";
-import { Events } from "./events";
-import { APIResponse } from "./fetch";
-import { Frame } from "./frame";
-import { Waiter } from "./waiter";
-import { Worker } from "./worker";
 import { assert } from "../utils/isomorphic/assert";
 import { headersObjectToArray } from "../utils/isomorphic/headers";
-import { serializeURLMatch, urlMatches } from "../utils/isomorphic/urlMatch";
+import {
+  resolveGlobToRegexPattern,
+  serializeURLMatch,
+  urlMatches,
+} from "../utils/isomorphic/urlMatch";
 import { LongStandingScope, ManualPromise } from "../utils/isomorphic/manualPromise";
 import { MultiMap } from "../utils/isomorphic/multimap";
-import { isString } from "../utils/isomorphic/rtti";
+import { isRegExp, isString } from "../utils/isomorphic/rtti";
 import { rewriteErrorMessage } from "../utils/isomorphic/stackTrace";
 import { getMimeTypeForPath } from "../utils/isomorphic/mimeType";
 import { readTempFile } from "./fileUtils";
+import { currentZone } from "../utils/zones";
+import { Worker } from "./worker";
+import { Waiter } from "./waiter";
+import { Frame } from "./frame";
+import { APIResponse } from "./fetch";
+import { Events } from "./events";
+import { isTargetClosedError } from "./errors";
+import { ChannelOwner } from "./channelOwner";
+import { kNoTimeout } from "./timeoutSettings";
 
 import type { BrowserContext } from "./browserContext";
 import type { Page } from "./page";
@@ -40,7 +46,7 @@ import type * as api from "../../types/types";
 import type { HeadersArray } from "../utils/isomorphic/types";
 import type { URLMatch } from "../utils/isomorphic/urlMatch";
 import type * as channels from "../protocol/channels";
-import type { Platform, Zone } from "./platform";
+import type { Zone } from "../utils/zones";
 
 export type NetworkCookie = {
   name: string;
@@ -71,6 +77,22 @@ export type ClearNetworkCookieOptions = {
   path?: string | RegExp;
 };
 
+export function toClearCookiesParams(
+  options: ClearNetworkCookieOptions
+): channels.BrowserContextClearCookiesParams {
+  return {
+    name: isString(options.name) ? options.name : undefined,
+    nameRegexSource: isRegExp(options.name) ? options.name.source : undefined,
+    nameRegexFlags: isRegExp(options.name) ? options.name.flags : undefined,
+    domain: isString(options.domain) ? options.domain : undefined,
+    domainRegexSource: isRegExp(options.domain) ? options.domain.source : undefined,
+    domainRegexFlags: isRegExp(options.domain) ? options.domain.flags : undefined,
+    path: isString(options.path) ? options.path : undefined,
+    pathRegexSource: isRegExp(options.path) ? options.path.source : undefined,
+    pathRegexFlags: isRegExp(options.path) ? options.path.flags : undefined,
+  };
+}
+
 type SerializedFallbackOverrides = {
   url?: string;
   method?: string;
@@ -90,7 +112,6 @@ export class Request extends ChannelOwner<channels.RequestChannel> implements ap
   private _redirectedTo: Request | null = null;
   _failureText: string | null = null;
   _response: Response | null = null;
-  private _hasResponse = false;
   private _provisionalHeaders: RawHeaders;
   private _actualHeadersPromise: Promise<RawHeaders> | undefined;
   _timing: ResourceTiming;
@@ -125,8 +146,6 @@ export class Request extends ChannelOwner<channels.RequestChannel> implements ap
       responseStart: -1,
       responseEnd: -1,
     };
-    this._hasResponse = this._initializer.hasResponse ?? false;
-    this._channel.on("response", () => (this._hasResponse = true));
   }
 
   url(): string {
@@ -143,7 +162,7 @@ export class Request extends ChannelOwner<channels.RequestChannel> implements ap
 
   postData(): string | null {
     return (
-      (this._fallbackOverrides.postDataBuffer || this._initializer.postData)?.toString("utf-8") ||
+      (this._fallbackOverrides.postDataBuffer ?? this._initializer.postData)?.toString("utf-8") ??
       null
     );
   }
@@ -187,7 +206,7 @@ export class Request extends ChannelOwner<channels.RequestChannel> implements ap
     if (!this._actualHeadersPromise) {
       this._actualHeadersPromise = this._wrapApiCall(
         async () => {
-          return new RawHeaders((await this._channel.rawRequestHeaders()).headers);
+          return new RawHeaders((await this._channel.rawRequestHeaders({}, kNoTimeout)).headers);
         },
         { internal: true }
       );
@@ -208,11 +227,11 @@ export class Request extends ChannelOwner<channels.RequestChannel> implements ap
   }
 
   async response(): Promise<Response | null> {
-    return Response.fromNullable((await this._channel.response()).response);
+    return Response.fromNullable((await this._channel.response({}, kNoTimeout)).response);
   }
 
   async _internalResponse(): Promise<Response | null> {
-    return Response.fromNullable((await this._channel.response()).response);
+    return Response.fromNullable((await this._channel.response({}, kNoTimeout)).response);
   }
 
   existingResponse(): Response | null {
@@ -271,7 +290,7 @@ export class Request extends ChannelOwner<channels.RequestChannel> implements ap
   async sizes(): Promise<RequestSizes> {
     const response = await this.response();
     if (!response) throw new Error("Unable to fetch sizes for failed request");
-    return (await response._channel.sizes()).sizes;
+    return (await response._channel.sizes({}, kNoTimeout)).sizes;
   }
 
   _setResponseEndTiming(responseEndTiming: number) {
@@ -354,13 +373,13 @@ export class Route extends ChannelOwner<channels.RouteChannel> implements api.Ro
 
   async abort(errorCode?: string) {
     await this._handleRoute(async () => {
-      await this._raceWithTargetClose(this._channel.abort({ errorCode }));
+      await this._raceWithTargetClose(this._channel.abort({ errorCode }, kNoTimeout));
     });
   }
 
   async _redirectNavigationRequest(url: string) {
     await this._handleRoute(async () => {
-      await this._raceWithTargetClose(this._channel.redirectNavigationRequest({ url }));
+      await this._raceWithTargetClose(this._channel.redirectNavigationRequest({ url }, kNoTimeout));
     });
   }
 
@@ -369,6 +388,7 @@ export class Route extends ChannelOwner<channels.RouteChannel> implements api.Ro
       maxRedirects?: number;
       maxRetries?: number;
       timeout?: number;
+      signal?: AbortSignal;
     } = {}
   ): Promise<APIResponse> {
     return await this._wrapApiCall(async () => {
@@ -462,13 +482,16 @@ export class Route extends ChannelOwner<channels.RouteChannel> implements api.Ro
     if (length && !("content-length" in headers)) headers["content-length"] = String(length);
 
     await this._raceWithTargetClose(
-      this._channel.fulfill({
-        status: statusOption || 200,
-        headers: headersObjectToArray(headers),
-        body,
-        isBase64,
-        fetchResponseUid,
-      })
+      this._channel.fulfill(
+        {
+          status: statusOption || 200,
+          headers: headersObjectToArray(headers),
+          body,
+          isBase64,
+          fetchResponseUid,
+        },
+        kNoTimeout
+      )
     );
   }
 
@@ -492,13 +515,16 @@ export class Route extends ChannelOwner<channels.RouteChannel> implements api.Ro
   async _innerContinue(isFallback: boolean) {
     const options = this.request()._fallbackOverridesForContinue();
     return await this._raceWithTargetClose(
-      this._channel.continue({
-        url: options.url,
-        method: options.method,
-        headers: options.headers ? headersObjectToArray(options.headers) : undefined,
-        postData: options.postDataBuffer,
-        isFallback,
-      })
+      this._channel.continue(
+        {
+          url: options.url,
+          method: options.method,
+          headers: options.headers ? headersObjectToArray(options.headers) : undefined,
+          postData: options.postDataBuffer,
+          isFallback,
+        },
+        kNoTimeout
+      )
     );
   }
 }
@@ -543,16 +569,20 @@ export class WebSocketRoute
         return this._initializer.url;
       },
 
+      protocols: () => {
+        return [...this._initializer.protocols];
+      },
+
       close: async (options: { code?: number; reason?: string } = {}) => {
-        await this._channel.closeServer({ ...options, wasClean: true }).catch(() => {});
+        await this._channel.closeServer({ ...options, wasClean: true }, kNoTimeout).catch(() => {});
       },
 
       send: (message: string | Buffer) => {
         if (isString(message))
-          this._channel.sendToServer({ message, isBase64: false }).catch(() => {});
+          this._channel.sendToServer({ message, isBase64: false }, kNoTimeout).catch(() => {});
         else
           this._channel
-            .sendToServer({ message: message.toString("base64"), isBase64: true })
+            .sendToServer({ message: message.toString("base64"), isBase64: true }, kNoTimeout)
             .catch(() => {});
       },
 
@@ -564,23 +594,24 @@ export class WebSocketRoute
     this._channel.on("messageFromPage", ({ message, isBase64 }) => {
       if (this._onPageMessage)
         this._onPageMessage(isBase64 ? Buffer.from(message, "base64") : message);
-      else if (this._connected) this._channel.sendToServer({ message, isBase64 }).catch(() => {});
+      else if (this._connected)
+        this._channel.sendToServer({ message, isBase64 }, kNoTimeout).catch(() => {});
     });
 
     this._channel.on("messageFromServer", ({ message, isBase64 }) => {
       if (this._onServerMessage)
         this._onServerMessage(isBase64 ? Buffer.from(message, "base64") : message);
-      else this._channel.sendToPage({ message, isBase64 }).catch(() => {});
+      else this._channel.sendToPage({ message, isBase64 }, kNoTimeout).catch(() => {});
     });
 
     this._channel.on("closePage", ({ code, reason, wasClean }) => {
       if (this._onPageClose) this._onPageClose(code, reason);
-      else this._channel.closeServer({ code, reason, wasClean }).catch(() => {});
+      else this._channel.closeServer({ code, reason, wasClean }, kNoTimeout).catch(() => {});
     });
 
     this._channel.on("closeServer", ({ code, reason, wasClean }) => {
       if (this._onServerClose) this._onServerClose(code, reason);
-      else this._channel.closePage({ code, reason, wasClean }).catch(() => {});
+      else this._channel.closePage({ code, reason, wasClean }, kNoTimeout).catch(() => {});
     });
   }
 
@@ -588,22 +619,27 @@ export class WebSocketRoute
     return this._initializer.url;
   }
 
+  protocols(): string[] {
+    return [...this._initializer.protocols];
+  }
+
   async close(options: { code?: number; reason?: string } = {}) {
-    await this._channel.closePage({ ...options, wasClean: true }).catch(() => {});
+    await this._channel.closePage({ ...options, wasClean: true }, kNoTimeout).catch(() => {});
   }
 
   connectToServer() {
     if (this._connected) throw new Error("Already connected to the server");
     this._connected = true;
-    this._channel.connect().catch(() => {});
+    this._channel.connect({}, kNoTimeout).catch(() => {});
     return this._server;
   }
 
   send(message: string | Buffer) {
-    if (isString(message)) this._channel.sendToPage({ message, isBase64: false }).catch(() => {});
+    if (isString(message))
+      this._channel.sendToPage({ message, isBase64: false }, kNoTimeout).catch(() => {});
     else
       this._channel
-        .sendToPage({ message: message.toString("base64"), isBase64: true })
+        .sendToPage({ message: message.toString("base64"), isBase64: true }, kNoTimeout)
         .catch(() => {});
   }
 
@@ -623,7 +659,7 @@ export class WebSocketRoute
     if (this._connected) return;
     // Ensure that websocket is "open" and can send messages without an actual server connection.
     // If this happens after the page has been closed, ignore the error.
-    await this._channel.ensureOpened().catch(() => {});
+    await this._channel.ensureOpened({}, kNoTimeout).catch(() => {});
   }
 }
 
@@ -636,6 +672,9 @@ export class WebSocketRouteHandler {
     this._baseURL = baseURL;
     this.url = url;
     this.handler = handler;
+    // Eagerly validate string globs so that invalid patterns throw at the call site
+    // (e.g. page.routeWebSocket()) rather than silently failing later.
+    if (typeof url === "string") resolveGlobToRegexPattern(baseURL, url, true);
   }
 
   static prepareInterceptionPatterns(handlers: WebSocketRouteHandler[]) {
@@ -744,7 +783,7 @@ export class Response extends ChannelOwner<channels.ResponseChannel> implements 
   async _actualHeaders(): Promise<RawHeaders> {
     if (!this._actualHeadersPromise) {
       this._actualHeadersPromise = (async () => {
-        return new RawHeaders((await this._channel.rawResponseHeaders()).headers);
+        return new RawHeaders((await this._channel.rawResponseHeaders({}, kNoTimeout)).headers);
       })();
     }
     return await this._actualHeadersPromise;
@@ -771,7 +810,7 @@ export class Response extends ChannelOwner<channels.ResponseChannel> implements 
   }
 
   async body(): Promise<Buffer> {
-    return (await this._channel.body()).binary;
+    return (await this._channel.body({}, kNoTimeout)).binary;
   }
 
   async text(): Promise<string> {
@@ -793,15 +832,15 @@ export class Response extends ChannelOwner<channels.ResponseChannel> implements 
   }
 
   async serverAddr(): Promise<RemoteAddr | null> {
-    return (await this._channel.serverAddr()).value || null;
+    return (await this._channel.serverAddr({}, kNoTimeout)).value || null;
   }
 
   async securityDetails(): Promise<SecurityDetails | null> {
-    return (await this._channel.securityDetails()).value || null;
+    return (await this._channel.securityDetails({}, kNoTimeout)).value || null;
   }
 
   async httpVersion(): Promise<string> {
-    return (await this._channel.httpVersion()).value;
+    return (await this._channel.httpVersion({}, kNoTimeout)).value;
   }
 }
 
@@ -849,7 +888,7 @@ export class WebSocket extends ChannelOwner<channels.WebSocketChannel> implement
 
   async waitForEvent(event: string, optionsOrPredicate: WaitForEventOptions = {}): Promise<any> {
     return await this._wrapApiCall(async () => {
-      const timeout = this._page._timeoutSettings.timeout(
+      const timeoutOptions = this._page._timeoutSettings.timeout(
         typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate
       );
       const predicate =
@@ -858,8 +897,8 @@ export class WebSocket extends ChannelOwner<channels.WebSocketChannel> implement
           : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent(this, event);
       waiter.rejectOnTimeout(
-        timeout,
-        `Timeout ${timeout}ms exceeded while waiting for event "${event}"`
+        timeoutOptions,
+        `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`
       );
       if (event !== Events.WebSocket.Error)
         waiter.rejectOnEvent(this, Events.WebSocket.Error, new Error("Socket error"));
@@ -894,7 +933,6 @@ export class RouteHandler {
   private _savedZone: Zone;
 
   constructor(
-    platform: Platform,
     baseURL: string | undefined,
     url: URLMatch,
     handler: RouteHandlerCallback,
@@ -904,7 +942,10 @@ export class RouteHandler {
     this._times = times;
     this.url = url;
     this.handler = handler;
-    this._savedZone = platform.zones.current().pop();
+    this._savedZone = currentZone().without("apiZone");
+    // Eagerly validate string globs so that invalid patterns throw at the call site
+    // (e.g. page.route()) rather than silently aborting requests later.
+    if (typeof url === "string") resolveGlobToRegexPattern(baseURL, url);
   }
 
   static prepareInterceptionPatterns(handlers: RouteHandler[]) {

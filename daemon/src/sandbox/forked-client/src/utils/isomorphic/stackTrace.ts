@@ -20,6 +20,11 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+import path from "path";
+
+import { getAsBooleanFromENV } from "../env";
+import { isUnderTest } from "../debug";
+
 export type RawStack = string[];
 
 export type StackFrame = {
@@ -38,18 +43,14 @@ export function captureRawStack(): RawStack {
   return stack.split("\n");
 }
 
-export function parseStackFrame(
-  text: string,
-  pathSeparator: string,
-  showInternalStackFrames: boolean
-): StackFrame | null {
+export function parseStackFrame(text: string): StackFrame | null {
   const match = text && text.match(re);
   if (!match) return null;
 
   let fname = match[2];
   let file = match[7];
   if (!file) return null;
-  if (!showInternalStackFrames && (file.startsWith("internal") || file.startsWith("node:")))
+  if (!showInternalStackFrames() && (file.startsWith("internal") || file.startsWith("node:")))
     return null;
 
   const line = match[8];
@@ -95,7 +96,7 @@ export function parseStackFrame(
   }
 
   if (file) {
-    if (file.startsWith("file://")) file = fileURLToPath(file, pathSeparator);
+    if (file.startsWith("file://")) file = fileURLToPath(file);
     frame.file = file;
   }
 
@@ -133,11 +134,7 @@ export function splitErrorMessage(message: string): { name: string; message: str
   };
 }
 
-export function parseErrorStack(
-  stack: string,
-  pathSeparator: string,
-  showInternalStackFrames: boolean = false
-): {
+export function parseErrorStack(stack: string): {
   message: string;
   stackLines: string[];
   location?: StackFrame;
@@ -149,17 +146,41 @@ export function parseErrorStack(
   const stackLines = lines.slice(firstStackLine);
   let location: StackFrame | undefined;
   for (const line of stackLines) {
-    const frame = parseStackFrame(line, pathSeparator, showInternalStackFrames);
+    const frame = parseStackFrame(line);
     if (!frame || !frame.file) continue;
-    if (belongsToNodeModules(frame.file, pathSeparator)) continue;
+    if (belongsToNodeModules(frame.file)) continue;
     location = { file: frame.file, column: frame.column || 0, line: frame.line || 0 };
     break;
   }
   return { message, stackLines, location };
 }
 
-function belongsToNodeModules(file: string, pathSeparator: string) {
-  return file.includes(`${pathSeparator}node_modules${pathSeparator}`);
+function belongsToNodeModules(file: string) {
+  return file.includes(`${path.sep}node_modules${path.sep}`);
+}
+
+export function filterStackFile(file: string) {
+  if (_showInternalStackFrames) return true;
+  if (!!_coreDir && file.startsWith(_coreDir)) return false;
+  if (_boxedStackPrefixes.some((prefix) => file.startsWith(prefix))) return false;
+  if (
+    isUnderTest() &&
+    file.match(/[/\\]packages[/\\](playwright|playwright-core|utils|isomorphic|injected)[/\\]/)
+  )
+    return false;
+  if (isUnderTest() && file.match(/[/\\]playwright[^/\\]*[/\\]node_modules[/\\]/)) return false;
+  return true;
+}
+
+export function filteredStackTrace(rawStack: RawStack): StackFrame[] {
+  const frames: StackFrame[] = [];
+  for (const line of rawStack) {
+    const frame = parseStackFrame(line);
+    if (!frame || !frame.file) continue;
+    if (!filterStackFile(frame.file)) continue;
+    frames.push(frame);
+  }
+  return frames;
 }
 
 const re = new RegExp(
@@ -190,11 +211,32 @@ const re = new RegExp(
 
 const methodRe = /^(.*?) \[as (.*?)\]$/;
 
-function fileURLToPath(fileUrl: string, pathSeparator: string): string {
+function fileURLToPath(fileUrl: string): string {
   if (!fileUrl.startsWith("file://")) return fileUrl;
 
-  let path = decodeURIComponent(fileUrl.slice(7));
-  if (path.startsWith("/") && /^[a-zA-Z]:/.test(path.slice(1))) path = path.slice(1);
+  let filePath = decodeURIComponent(fileUrl.slice(7));
+  if (filePath.startsWith("/") && /^[a-zA-Z]:/.test(filePath.slice(1)))
+    filePath = filePath.slice(1);
 
-  return path.replace(/\//g, pathSeparator);
+  return filePath.replace(/\//g, path.sep);
+}
+
+let _coreDir: string | undefined;
+let _boxedStackPrefixes: string[] = [];
+
+export function setCoreDir(dir: string | undefined) {
+  _coreDir = dir;
+}
+
+export function coreDir(): string | undefined {
+  return _coreDir;
+}
+
+export function setBoxedStackPrefixes(prefixes: string[]) {
+  _boxedStackPrefixes = prefixes;
+}
+
+const _showInternalStackFrames = getAsBooleanFromENV("PWDEBUGIMPL");
+export function showInternalStackFrames(): boolean {
+  return _showInternalStackFrames;
 }

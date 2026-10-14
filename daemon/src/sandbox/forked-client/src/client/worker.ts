@@ -15,12 +15,13 @@
  * limitations under the License.
  */
 
+import { LongStandingScope } from "../utils/isomorphic/manualPromise";
 import { ChannelOwner } from "./channelOwner";
-import { TargetClosedError } from "./errors";
+import { ConsoleMessage } from "./consoleMessage";
+import { isTargetClosedError, TargetClosedError } from "./errors";
 import { Events } from "./events";
 import { JSHandle, assertMaxArguments, parseResult, serializeArgument } from "./jsHandle";
-import { LongStandingScope } from "../utils/isomorphic/manualPromise";
-import { TimeoutSettings } from "./timeoutSettings";
+import { TimeoutSettings, kNoTimeout } from "./timeoutSettings";
 import { Waiter } from "./waiter";
 
 import type { BrowserContext } from "./browserContext";
@@ -34,6 +35,7 @@ export class Worker extends ChannelOwner<channels.WorkerChannel> implements api.
   _page: Page | undefined; // Set for web workers.
   _context: BrowserContext | undefined; // Set for service workers.
   readonly _closedScope = new LongStandingScope();
+  private _closeReason: string | undefined;
 
   static fromNullable(worker: channels.WorkerChannel | undefined): Worker | null {
     return worker ? Worker.from(worker) : null;
@@ -55,14 +57,21 @@ export class Worker extends ChannelOwner<channels.WorkerChannel> implements api.
         [Events.Worker.Console, "console"],
       ])
     );
+    this._channel.on("console", (event) => {
+      // Note: we only receive console events here for workers from "chromium._connectToWorker".
+      this.emit(Events.Worker.Console, new ConsoleMessage(event, null, this));
+    });
     this._channel.on("close", () => {
       if (this._page) this._page._workers.delete(this);
       if (this._context) this._context._serviceWorkers.delete(this);
       this.emit(Events.Worker.Close, this);
     });
-    this.once(Events.Worker.Close, () =>
-      this._closedScope.close(this._page?._closeErrorWithReason() || new TargetClosedError())
-    );
+    this.once(Events.Worker.Close, () => this._closedScope.close(this._closeErrorWithReason()));
+  }
+
+  _closeErrorWithReason() {
+    if (this._closeReason) return new TargetClosedError(this._closeReason);
+    return this._page?._closeErrorWithReason() || new TargetClosedError();
   }
 
   url(): string {
@@ -71,11 +80,14 @@ export class Worker extends ChannelOwner<channels.WorkerChannel> implements api.
 
   async evaluate<R, Arg>(pageFunction: structs.PageFunction<Arg, R>, arg?: Arg): Promise<R> {
     assertMaxArguments(arguments.length, 2);
-    const result = await this._channel.evaluateExpression({
-      expression: String(pageFunction),
-      isFunction: typeof pageFunction === "function",
-      arg: serializeArgument(arg),
-    });
+    const result = await this._channel.evaluateExpression(
+      {
+        expression: String(pageFunction),
+        isFunction: typeof pageFunction === "function",
+        arg: serializeArgument(arg),
+      },
+      kNoTimeout
+    );
     return parseResult(result.value);
   }
 
@@ -84,21 +96,22 @@ export class Worker extends ChannelOwner<channels.WorkerChannel> implements api.
     arg?: Arg
   ): Promise<structs.SmartHandle<R>> {
     assertMaxArguments(arguments.length, 2);
-    const result = await this._channel.evaluateExpressionHandle({
-      expression: String(pageFunction),
-      isFunction: typeof pageFunction === "function",
-      arg: serializeArgument(arg),
-    });
+    const result = await this._channel.evaluateExpressionHandle(
+      {
+        expression: String(pageFunction),
+        isFunction: typeof pageFunction === "function",
+        arg: serializeArgument(arg),
+      },
+      kNoTimeout
+    );
     return JSHandle.from(result.handle) as any as structs.SmartHandle<R>;
   }
 
   async waitForEvent(event: string, optionsOrPredicate: WaitForEventOptions = {}): Promise<any> {
     return await this._wrapApiCall(async () => {
       const timeoutSettings =
-        this._page?._timeoutSettings ??
-        this._context?._timeoutSettings ??
-        new TimeoutSettings(this._platform);
-      const timeout = timeoutSettings.timeout(
+        this._page?._timeoutSettings ?? this._context?._timeoutSettings ?? new TimeoutSettings();
+      const timeoutOptions = timeoutSettings.timeout(
         typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate
       );
       const predicate =
@@ -107,14 +120,24 @@ export class Worker extends ChannelOwner<channels.WorkerChannel> implements api.
           : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent(this, event);
       waiter.rejectOnTimeout(
-        timeout,
-        `Timeout ${timeout}ms exceeded while waiting for event "${event}"`
+        timeoutOptions,
+        `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`
       );
       if (event !== Events.Worker.Close)
-        waiter.rejectOnEvent(this, Events.Worker.Close, () => new TargetClosedError());
+        waiter.rejectOnEvent(this, Events.Worker.Close, () => this._closeErrorWithReason());
       const result = await waiter.waitForEvent(this, event, predicate as any);
       waiter.dispose();
       return result;
     });
+  }
+
+  async _disconnect(options: { reason?: string } = {}): Promise<void> {
+    this._closeReason = options.reason;
+    try {
+      await this._channel.disconnect(options, kNoTimeout);
+    } catch (e) {
+      if (isTargetClosedError(e)) return;
+      throw e;
+    }
   }
 }
