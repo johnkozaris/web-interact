@@ -4,7 +4,7 @@
 
 ### Changed
 - Managed Chromium launches now enable Chromium sandboxing by default, with `WEB_INTERACT_CHROMIUM_SANDBOX=false` as an explicit compatibility escape hatch for restricted hosts.
-- **Playwright 1.64**: the runtime now installs Playwright 1.64.1 (default mode) or Patchright 1.64.0 (assistant mode), up from 1.59.1, which brings Chrome for Testing 156. The sandbox's forked Playwright client is synced to Playwright v1.64.0.
+- **Playwright 1.64**: the runtime now installs Playwright 1.64.0 (default mode) or Patchright 1.64.0 (assistant mode), up from 1.59.1, which brings Chrome for Testing 156. The sandbox's forked Playwright client is synced to Playwright v1.64.0.
 - Sandbox scripts can use 1.64's `page.screencast` and `tracing.startHar()`/`stopHar()`. Traces, HARs, and screencast recordings are saved into the controlled temp directory, like screenshots.
 - `playwright.devices` is populated inside the sandbox instead of being empty.
 - The first-run runtime install uses pnpm 12.

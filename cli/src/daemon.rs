@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 const EMBEDDED_DAEMON: &str = include_str!("../../daemon/dist/daemon.bundle.mjs");
 const EMBEDDED_SANDBOX_CLIENT: &str = include_str!("../../daemon/dist/sandbox-client.js");
-const PLAYWRIGHT_VERSION: &str = "1.64.1";
+const PLAYWRIGHT_VERSION: &str = "1.64.0";
 const PATCHRIGHT_VERSION: &str = "1.64.0";
 const QUICKJS_VERSION: &str = "0.32.0";
 
@@ -385,7 +385,7 @@ fn dependency_installed(base_dir: &Path, package_name: &str, expected_version: &
     };
 
     if expected_version.starts_with("npm:") {
-        // Alias: "npm:playwright@1.64.1" — check the installed package is actually playwright
+        // Alias: "npm:playwright@1.64.0" — check the installed package is actually playwright
         let (expected_name, expected_ver) = expected_version
             .strip_prefix("npm:")
             .unwrap()

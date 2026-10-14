@@ -53,7 +53,7 @@ The fork is synced to Playwright **v1.64.0** (upstream commit `606ecd8b3`), with
 The host runs it against two servers, chosen by browser mode:
 
 - `patchright-core` 1.64.0 in assistant mode
-- `playwright-core` 1.64.1 in default mode
+- `playwright-core` 1.64.0 in default mode
 
 Both speak the same protocol (805 messages). Patchright only adds optional fields such as `isolatedContext` and `patchrightInitScript`, which this client never sends. Upstream's client, protocol, and isomorphic sources are identical between v1.64.0 and v1.64.1.
 

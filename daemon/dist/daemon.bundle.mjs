@@ -24386,7 +24386,7 @@ var PID_PATH = getPidPath();
 var BROWSERS_DIR = getBrowsersDir();
 var DEFAULT_SCRIPT_TIMEOUT_MS = 2e4;
 var SOCKET_CLOSE_TIMEOUT_MS = 500;
-var PLAYWRIGHT_VERSION = "1.64.1";
+var PLAYWRIGHT_VERSION = "1.64.0";
 var PATCHRIGHT_VERSION = "1.64.0";
 var QUICKJS_VERSION = "0.32.0";
 function buildRuntimePackageJson() {

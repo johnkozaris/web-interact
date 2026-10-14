@@ -4,6 +4,8 @@ allowBuilds:
   esbuild: true
   patchright: true
   patchright-core: true
+# Patchright 1.64.0 (published 2026-10-14T14:43Z) was adopted before pnpm's
+# one-day minimumReleaseAge passed. Remove this once it is older than a day.
 minimumReleaseAgeExclude:
   - patchright-core@1.64.0
   - patchright@1.64.0

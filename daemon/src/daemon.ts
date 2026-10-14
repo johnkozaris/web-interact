@@ -24,7 +24,7 @@ const PID_PATH = getPidPath();
 const BROWSERS_DIR = getBrowsersDir();
 const DEFAULT_SCRIPT_TIMEOUT_MS = 20_000;
 const SOCKET_CLOSE_TIMEOUT_MS = 500;
-const PLAYWRIGHT_VERSION = "1.64.1";
+const PLAYWRIGHT_VERSION = "1.64.0";
 const PATCHRIGHT_VERSION = "1.64.0";
 const QUICKJS_VERSION = "0.32.0";
 
