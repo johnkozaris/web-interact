@@ -2,14 +2,21 @@ import type { Browser, Page } from "patchright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createProtocolBridge, type ProtocolBridge } from "../protocol-bridge.js";
 import type { PlaywrightClientLike } from "../playwright-internals.js";
+import {
+  LOCAL_TEST_PAGE_TITLE,
+  startLocalTestSite,
+  type LocalTestSite,
+} from "./local-test-site.js";
 
-describe.sequential("protocol bridge", () => {
+describe("protocol bridge", () => {
   let bridge: ProtocolBridge;
   let playwright: PlaywrightClientLike;
   let browser: Browser | undefined;
   let page: Page | undefined;
+  let site: LocalTestSite;
 
   beforeAll(async () => {
+    site = await startLocalTestSite();
     bridge = createProtocolBridge();
     playwright = await bridge.initializePlaywright();
   }, 60_000);
@@ -24,6 +31,7 @@ describe.sequential("protocol bridge", () => {
     }
 
     await bridge.dispose("test teardown");
+    await site?.close();
   }, 60_000);
 
   it("initializes Playwright through the bridge", () => {
@@ -34,11 +42,11 @@ describe.sequential("protocol bridge", () => {
     browser = await playwright.chromium.launch({ headless: true });
     page = await browser.newPage();
 
-    await page.goto("https://example.com");
+    await page.goto(site.url);
 
-    await expect(page.title()).resolves.toBe("Example Domain");
-    await expect(page.locator("h1").textContent()).resolves.toBe("Example Domain");
-    await expect(page.evaluate(() => document.title)).resolves.toBe("Example Domain");
+    await expect(page.title()).resolves.toBe(LOCAL_TEST_PAGE_TITLE);
+    await expect(page.locator("h1").textContent()).resolves.toBe(LOCAL_TEST_PAGE_TITLE);
+    await expect(page.evaluate(() => document.title)).resolves.toBe(LOCAL_TEST_PAGE_TITLE);
   }, 120_000);
 
   it("cleans up page, browser, and bridge connection", async () => {

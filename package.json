@@ -26,9 +26,9 @@
   },
   "engines": {
     "node": ">=22",
-    "pnpm": ">=10"
+    "pnpm": ">=12"
   },
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "pnpm@12.11.2",
   "scripts": {
     "build": "./setup.sh --build",
     "install:local": "./setup.sh --install-local",
@@ -52,12 +52,5 @@
     "headless",
     "web",
     "testing"
-  ],
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "patchright",
-      "patchright-core"
-    ]
-  }
+  ]
 }

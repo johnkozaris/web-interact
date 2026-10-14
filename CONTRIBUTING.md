@@ -23,7 +23,7 @@ The Rust CLI embeds the daemon bundle at compile time (`include_str!`) and extra
 
 - Rust 1.85+
 - Node.js 22+
-- pnpm 10+ (`corepack enable`)
+- pnpm 12+ (`corepack enable`)
 
 ## Development
 

@@ -6830,6 +6830,7 @@ ${lines.join("\n")}`;
     constructor(preferredQuote) {
       this.preferredQuote = preferredQuote;
     }
+    preferredQuote;
     generateLocator(base, kind, body, options = {}) {
       switch (kind) {
         case "default":

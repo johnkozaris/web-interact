@@ -6,6 +6,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { BrowserManager } from "../../browser-manager.js";
 import { QuickJSSandbox } from "../quickjs-sandbox.js";
+import {
+  LOCAL_TEST_PAGE_TITLE,
+  startLocalTestSite,
+  type LocalTestSite,
+} from "./local-test-site.js";
 
 const browserName = "named-pages";
 
@@ -48,11 +53,13 @@ function outputLines(output: CapturedOutput): string[] {
   return output.stdout.map((line) => line.trim()).filter((line) => line.length > 0);
 }
 
-describe.sequential("QuickJS named page management", () => {
+describe("QuickJS named page management", () => {
   let browserRootDir = "";
   let manager: BrowserManager;
+  let site: LocalTestSite;
 
   beforeAll(async () => {
+    site = await startLocalTestSite();
     browserRootDir = await mkdtemp(path.join(os.tmpdir(), "web-interact-quickjs-named-pages-"));
     manager = new BrowserManager(path.join(browserRootDir, "browsers"));
   }, 180_000);
@@ -63,6 +70,7 @@ describe.sequential("QuickJS named page management", () => {
 
   afterAll(async () => {
     await manager.stopAll();
+    await site?.close();
     await rm(browserRootDir, {
       recursive: true,
       force: true,
@@ -98,7 +106,7 @@ describe.sequential("QuickJS named page management", () => {
         sandbox,
         `
         const page = await browser.getPage("persist");
-        await page.goto("https://example.com");
+        await page.goto(${JSON.stringify(site.url)});
         await page.evaluate(() => {
           window.name = "persisted-state";
         });
@@ -120,8 +128,8 @@ describe.sequential("QuickJS named page management", () => {
     }
 
     expect(output.stderr).toEqual([]);
-    expect(outputLines(output)).toContain("https://example.com/");
-    expect(outputLines(output)).toContain("Example Domain");
+    expect(outputLines(output)).toContain(site.url);
+    expect(outputLines(output)).toContain(LOCAL_TEST_PAGE_TITLE);
     expect(outputLines(output)).toContain("persisted-state");
     expect(pageNames(await manager.listPages(browserName))).toEqual(["persist"]);
   }, 120_000);
@@ -140,7 +148,7 @@ describe.sequential("QuickJS named page management", () => {
         sandbox,
         `
         const page = await browser.newPage();
-        await page.goto("https://example.com");
+        await page.goto(${JSON.stringify(site.url)});
         console.log(await page.title());
       `
       );
@@ -151,9 +159,9 @@ describe.sequential("QuickJS named page management", () => {
     const livePages = entry.context.pages().filter((page) => !page.isClosed());
 
     expect(output.stderr).toEqual([]);
-    expect(outputLines(output)).toContain("Example Domain");
+    expect(outputLines(output)).toContain(LOCAL_TEST_PAGE_TITLE);
     expect(livePages).toHaveLength(baselinePageCount);
-    expect(livePages.map((page) => page.url())).not.toContain("https://example.com/");
+    expect(livePages.map((page) => page.url())).not.toContain(site.url);
     expect(pageNames(await manager.listPages(browserName))).toEqual([]);
   }, 120_000);
 

@@ -33,7 +33,7 @@ fn build_runtime_package_json(mode: &str) -> String {
   "name": "web-interact-runtime",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "pnpm@12.11.2",
   "dependencies": {{
     "patchright": "npm:playwright@{PLAYWRIGHT_VERSION}",
     "patchright-core": "npm:playwright-core@{PLAYWRIGHT_VERSION}",
@@ -48,7 +48,7 @@ fn build_runtime_package_json(mode: &str) -> String {
   "name": "web-interact-runtime",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "pnpm@12.11.2",
   "dependencies": {{
     "{pkg}": "{version}",
     "{core}": "{version}",
@@ -410,7 +410,7 @@ fn run_package_manager_command(args: &[&str], current_dir: &Path) -> Result<(), 
     }
 
     Err(format!(
-        "Could not find `pnpm` or `corepack` in PATH while setting up the embedded daemon runtime in {}. Install pnpm 10 or enable Corepack and run `web-interact install` again.",
+        "Could not find `pnpm` or `corepack` in PATH while setting up the embedded daemon runtime in {}. Install pnpm 12 or enable Corepack and run `web-interact install` again.",
         current_dir.display()
     )
     .into())

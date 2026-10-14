@@ -62,7 +62,7 @@ function parseLastJsonLine<T>(output: CapturedOutput): T {
   return JSON.parse(lastLine) as T;
 }
 
-describe.sequential("QuickJS sandbox file I/O", () => {
+describe("QuickJS sandbox file I/O", () => {
   let browserRootDir = "";
   let manager: BrowserManager;
   const cleanupPaths = new Set<string>();

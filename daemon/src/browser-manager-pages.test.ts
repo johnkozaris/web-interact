@@ -12,7 +12,7 @@ function createDataUrl(title: string, body: string): string {
   return `data:text/html,${encodeURIComponent(`<title>${title}</title>${body}`)}`;
 }
 
-describe.sequential("BrowserManager page discovery", () => {
+describe("BrowserManager page discovery", () => {
   let browserRootDir = "";
   let manager: BrowserManager;
 

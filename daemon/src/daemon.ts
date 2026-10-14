@@ -40,7 +40,7 @@ function buildRuntimePackageJson(): string {
       name: "web-interact-runtime",
       private: true,
       type: "module",
-      packageManager: "pnpm@10.33.0",
+      packageManager: "pnpm@12.11.2",
       dependencies: { ...deps, "quickjs-emscripten": QUICKJS_VERSION },
     },
     null,
@@ -293,7 +293,7 @@ async function runPackageManagerCommand(
   }
 
   throw new Error(
-    `Could not find \`pnpm\` or \`corepack\` in PATH while setting up the embedded daemon runtime in ${cwd}. Install pnpm 10 or enable Corepack and try again.`
+    `Could not find \`pnpm\` or \`corepack\` in PATH while setting up the embedded daemon runtime in ${cwd}. Install pnpm 12 or enable Corepack and try again.`
   );
 }
 

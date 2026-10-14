@@ -7,6 +7,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BrowserManager } from "../../browser-manager.js";
 import { runScript } from "../script-runner-quickjs.js";
 import { ensureSandboxClientBundle } from "./bundle-test-helpers.js";
+import {
+  LOCAL_TEST_PAGE_TITLE,
+  startLocalTestSite,
+  type LocalTestSite,
+} from "./local-test-site.js";
 
 interface CapturedOutput {
   stdout: string[];
@@ -36,12 +41,14 @@ function createOutput(): CapturedOutput & {
   };
 }
 
-describe.sequential("QuickJS sandbox integration", () => {
+describe("QuickJS sandbox integration", () => {
   let browserRootDir = "";
   let manager: BrowserManager;
+  let site: LocalTestSite;
 
   beforeAll(async () => {
     await ensureSandboxClientBundle();
+    site = await startLocalTestSite();
 
     browserRootDir = await mkdtemp(path.join(os.tmpdir(), "web-interact-quickjs-"));
     manager = new BrowserManager(path.join(browserRootDir, "browsers"));
@@ -52,6 +59,7 @@ describe.sequential("QuickJS sandbox integration", () => {
 
   afterAll(async () => {
     await manager.stopAll();
+    await site?.close();
     await rm(browserRootDir, {
       recursive: true,
       force: true,
@@ -64,7 +72,7 @@ describe.sequential("QuickJS sandbox integration", () => {
     await runScript(
       `
         const page = await browser.getPage("nav");
-        await page.goto("https://example.com");
+        await page.goto(${JSON.stringify(site.url)});
         console.log(await page.title());
       `,
       manager,
@@ -75,7 +83,7 @@ describe.sequential("QuickJS sandbox integration", () => {
       }
     );
 
-    expect(output.stdout.join("")).toContain("Example Domain");
+    expect(output.stdout.join("")).toContain(LOCAL_TEST_PAGE_TITLE);
     expect(output.stderr.join("")).toBe("");
   }, 120_000);
 
@@ -85,7 +93,7 @@ describe.sequential("QuickJS sandbox integration", () => {
     await runScript(
       `
         const page = await browser.getPage("locator");
-        await page.goto("https://example.com");
+        await page.goto(${JSON.stringify(site.url)});
         console.log(await page.locator("h1").textContent());
       `,
       manager,
@@ -96,7 +104,7 @@ describe.sequential("QuickJS sandbox integration", () => {
       }
     );
 
-    expect(output.stdout.join("")).toContain("Example Domain");
+    expect(output.stdout.join("")).toContain(LOCAL_TEST_PAGE_TITLE);
   }, 120_000);
 
   it("supports page.evaluate", async () => {
@@ -105,7 +113,7 @@ describe.sequential("QuickJS sandbox integration", () => {
     await runScript(
       `
         const page = await browser.getPage("evaluate");
-        await page.goto("https://example.com");
+        await page.goto(${JSON.stringify(site.url)});
         console.log(await page.evaluate(() => document.title));
       `,
       manager,
@@ -116,7 +124,7 @@ describe.sequential("QuickJS sandbox integration", () => {
       }
     );
 
-    expect(output.stdout.join("")).toContain("Example Domain");
+    expect(output.stdout.join("")).toContain(LOCAL_TEST_PAGE_TITLE);
   }, 120_000);
 
   it("reports thrown script errors", async () => {
