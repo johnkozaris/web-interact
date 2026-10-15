@@ -22,7 +22,6 @@ export class HostBridge {
   private readonly playwright: unknown;
   private readonly sendToSandbox: (json: string) => void;
   private readonly options: Omit<HostBridgeOptions, "sendToSandbox">;
-  private dispatchQueue: Promise<void> = Promise.resolve();
 
   private playwrightDispatcher?: PlaywrightDispatcherLike;
   private disposed = false;
@@ -54,12 +53,10 @@ export class HostBridge {
 
   async receiveFromSandbox(json: string): Promise<void> {
     const message = JSON.parse(json) as Record<string, unknown>;
-    const dispatch = this.dispatchQueue.then(async () => {
-      await this.dispatcherConnection.dispatch(message);
-    });
-
-    this.dispatchQueue = dispatch.catch(() => undefined);
-    await dispatch;
+    // Dispatch each call as soon as it arrives, as Playwright's own in-process
+    // connection does. Calls can depend on later ones: page.evaluate() can wait on
+    // a fetch that only a route.fulfill() sent after it completes.
+    await this.dispatcherConnection.dispatch(message);
   }
 
   async dispose(): Promise<void> {

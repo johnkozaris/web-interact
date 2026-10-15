@@ -905,4 +905,71 @@ describe("QuickJS Playwright Page API coverage", () => {
       expect(result.requestUrls).toContain(firstUrl);
     });
   });
+
+  describe("network interception", () => {
+    const browserName = "playwright-network";
+    let harness: JsonSandboxHarness;
+    let navigationServer: NavigationServer;
+
+    beforeAll(async () => {
+      harness = await createSandboxHarness(manager, browserName);
+      navigationServer = await createNavigationServer();
+    }, 180_000);
+
+    afterAll(async () => {
+      await harness.dispose();
+      await manager.stopBrowser(browserName);
+      await navigationServer.close();
+    }, 180_000);
+
+    it("supports page.route() with fulfill(), abort(), and continue()", async () => {
+      const result = await harness.runJson<{
+        mocked: { status: number; contentType: string; body: { msg: string } };
+        aborted: string;
+        continued: number;
+      }>(`
+        const page = await browser.getPage("page-route");
+        await page.goto(${JSON.stringify(`${navigationServer.baseUrl}/nav/first`)});
+
+        await page.route("**/api/mocked", (route) =>
+          route.fulfill({
+            status: 201,
+            contentType: "application/json",
+            body: JSON.stringify({ msg: "mocked ✓" }),
+          })
+        );
+        await page.route("**/api/blocked", (route) => route.abort());
+        await page.route("**/api/passthrough", (route) => route.continue());
+
+        const mocked = await page.evaluate(async () => {
+          const response = await fetch("/api/mocked");
+          return {
+            status: response.status,
+            contentType: response.headers.get("content-type"),
+            body: await response.json(),
+          };
+        });
+        const aborted = await page.evaluate(() =>
+          fetch("/api/blocked").then(
+            () => "loaded",
+            () => "failed"
+          )
+        );
+        const continued = await page.evaluate(
+          async () => (await fetch("/api/passthrough")).status
+        );
+        await page.unrouteAll();
+        console.log(JSON.stringify({ mocked, aborted, continued }));
+      `);
+
+      expect(result.mocked).toEqual({
+        status: 201,
+        contentType: "application/json",
+        body: { msg: "mocked ✓" },
+      });
+      expect(result.aborted).toBe("failed");
+      // The navigation server answers unknown paths with 404.
+      expect(result.continued).toBe(404);
+    });
+  });
 });
