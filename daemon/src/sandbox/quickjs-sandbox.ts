@@ -16,6 +16,7 @@ import {
   cdpClickAt,
   cdpDrag,
   cdpType,
+  getDocumentId,
   getPageElementsCDP,
   waitForNetworkIdle,
   type CDPSession as DOMCDPSession,
@@ -1198,7 +1199,10 @@ export class QuickJSSandbox {
 
     // Use CDP-based detection (asks Chrome what's interactive instead of guessing)
     const browserName = this.#options.browserName;
-    const { result, currentSelectors } = await getPageElementsCDP(
+    // Read before discover, like the document id, so a navigation while it runs
+    // leaves both naming the older page and the next index action discovers again.
+    const url = (page as Page).url();
+    const { result, currentSelectors, documentId } = await getPageElementsCDP(
       page as Page,
       {
         maxElements: opts.maxElements,
@@ -1212,18 +1216,17 @@ export class QuickJSSandbox {
     this.#options.manager.setPreviousSelectors(browserName, pageName, currentSelectors);
 
     // Store elements for index-based actions (persists across script executions)
-    this.#options.manager.setDiscoverResult(
-      browserName,
-      pageName,
-      result.elements.map((e: { index: number; backendNodeId: number; selector: string; role: string; name: string; tag: string }) => ({
+    this.#options.manager.setDiscoverResult(browserName, pageName, {
+      elements: result.elements.map((e: { index: number; backendNodeId: number; selector: string; role: string; name: string; tag: string }) => ({
         backendNodeId: e.backendNodeId,
         selector: e.selector,
         role: e.role,
         name: e.name,
         tag: e.tag,
       })),
-      (page as Page).url()
-    );
+      url,
+      documentId,
+    });
 
     return JSON.stringify(result);
   }
@@ -1356,24 +1359,36 @@ export class QuickJSSandbox {
     const idx = typeof index === "number" ? index : parseInt(String(index), 10);
     const browserName = this.#options.browserName;
 
-    // Auto re-discover if page URL changed since last discover (live indices)
-    let elements = this.#options.manager.getDiscoverResult(browserName, pageName);
-    const discoverUrl = this.#options.manager.getDiscoverUrl(browserName, pageName);
-    if (elements) {
+    // Indices resolve to nodes of the document discover saw. Auto re-discover once the
+    // page has loaded another one, so they resolve to live nodes again (live indices).
+    let discovered = this.#options.manager.getDiscoverResult(browserName, pageName);
+    if (discovered) {
       try {
-        const page = await this.#options.manager.getPage(browserName, pageName);
-        const currentUrl = (page as Page).url();
-        if (discoverUrl && currentUrl !== discoverUrl) {
+        const page = (await this.#options.manager.getPage(browserName, pageName)) as Page;
+        if (page.url() !== discovered.url) {
           // Page navigated since last discover — re-discover automatically
           await this.#getPageElements(name, "{}");
-          elements = this.#options.manager.getDiscoverResult(browserName, pageName);
+          discovered = this.#options.manager.getDiscoverResult(browserName, pageName);
+        } else if ((await getDocumentId(page)) !== discovered.documentId) {
+          // Same URL, new document (reload, form post back to the same URL). Act only if
+          // the index still names the element discover showed, not whatever moved into it.
+          const previous = discovered.elements[idx - 1];
+          await this.#getPageElements(name, "{}");
+          discovered = this.#options.manager.getDiscoverResult(browserName, pageName);
+          const current = discovered?.elements[idx - 1];
+          if (previous && current && current.selector !== previous.selector) {
+            return JSON.stringify({
+              success: false,
+              error: `Element [${idx}] was ${previous.role || previous.tag} "${previous.name?.substring(0, 40) || ""}" before the page reloaded and is now ${current.role || current.tag} "${current.name?.substring(0, 40) || ""}". Run discover again.`,
+            });
+          }
         }
       } catch {
         // If we can't get the page, proceed with stale elements
       }
     }
 
-    if (!elements) {
+    if (!discovered) {
       let currentUrl = "";
       try {
         const p = await this.#options.manager.getPage(browserName, pageName);
@@ -1385,6 +1400,7 @@ export class QuickJSSandbox {
       });
     }
 
+    const { elements } = discovered;
     const el = elements[idx - 1]; // indices are 1-based
     if (!el) {
       return JSON.stringify({

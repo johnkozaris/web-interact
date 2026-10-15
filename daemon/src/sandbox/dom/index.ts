@@ -7,7 +7,7 @@
  */
 
 // Detection
-export { getPageElementsCDP } from "./service.js";
+export { getDocumentId, getPageElementsCDP } from "./service.js";
 export type { GetPageElementsOptions } from "./service.js";
 
 // CDP Actions (real browser-level input events)

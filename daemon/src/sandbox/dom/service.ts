@@ -46,6 +46,30 @@ async function withCDPSession<T>(
 }
 
 // ---------------------------------------------------------------------------
+// Document identity
+// ---------------------------------------------------------------------------
+
+/**
+ * The main frame's loaderId. Chrome issues a new one for every document it loads,
+ * including a reload or a form post back to the same URL, and the backendNodeIds
+ * that discover hands out only resolve inside the document they came from.
+ */
+async function readDocumentId(session: CDPSession): Promise<string | undefined> {
+  try {
+    const { frameTree } = (await session.send("Page.getFrameTree")) as {
+      frameTree: { frame: { loaderId: string } };
+    };
+    return frameTree.frame.loaderId;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function getDocumentId(page: Page): Promise<string | undefined> {
+  return withCDPSession(page, readDocumentId);
+}
+
+// ---------------------------------------------------------------------------
 // DOM tree walk + merge
 // ---------------------------------------------------------------------------
 
@@ -294,13 +318,22 @@ export async function getPageElementsCDP(
   page: Page,
   options?: GetPageElementsOptions,
   previousSelectors?: Set<string>
-): Promise<{ result: DiscoveryResult; currentSelectors: Set<string> }> {
+): Promise<{
+  result: DiscoveryResult;
+  currentSelectors: Set<string>;
+  /** The document the elements came from (see getDocumentId). */
+  documentId: string | undefined;
+}> {
   const maxElements = options?.maxElements ?? 200;
   const maxTextLength = options?.maxTextLength ?? 100;
   const includePaintOrder = options?.includePaintOrder !== false;
 
   return await withCDPSession(page, async (session) => {
     await session.send("DOM.enable").catch(() => {});
+
+    // Read before the DOM: if the page navigates while discover runs, the id then
+    // names the older document and the next index action discovers again.
+    const documentId = await readDocumentId(session);
 
     // Install popup handler to prevent dialog hangs
     const popup = await setupDialogHandler(session).catch(() => null);
@@ -478,6 +511,7 @@ export async function getPageElementsCDP(
         viewport,
       },
       currentSelectors,
+      documentId,
     };
   });
 }
