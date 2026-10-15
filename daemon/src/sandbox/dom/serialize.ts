@@ -76,6 +76,16 @@ export function getElementHint(el: DOMElement): string | null {
 // ---------------------------------------------------------------------------
 
 /**
+ * Label a tristate AX property. CDP reports `checked` and `pressed` as the strings
+ * "true", "false" or "mixed", so a plain truthiness check treats "false" as on.
+ */
+function tristateLabel(name: string, value: unknown): string | null {
+  if (value === true || value === "true") return name;
+  if (value === "mixed") return `${name}=mixed`;
+  return null;
+}
+
+/**
  * Serialize a single interactive element to a compact string.
  *
  * Format: `[index] tag "name" key=value (hint) [state]`
@@ -144,9 +154,11 @@ export function formatElement(
   // State from AX properties (Chrome computed, not HTML attributes)
   const states: string[] = [];
   for (const prop of axProps) {
-    if (prop.name === "checked" && prop.value) states.push("checked");
+    if (prop.name === "checked" || prop.name === "pressed") {
+      const state = tristateLabel(prop.name, prop.value);
+      if (state) states.push(state);
+    }
     if (prop.name === "expanded" && prop.value === true) states.push("expanded");
-    if (prop.name === "pressed" && prop.value === true) states.push("pressed");
     if (prop.name === "disabled" && prop.value === true) states.push("disabled");
     if (prop.name === "required" && prop.value === true) states.push("required");
     if (prop.name === "readonly" && prop.value === true) states.push("readonly");
