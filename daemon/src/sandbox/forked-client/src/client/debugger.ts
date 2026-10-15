@@ -17,14 +17,19 @@
 
 import { ChannelOwner } from "./channelOwner";
 import { Events } from "./events";
+import { kNoTimeout } from "./timeoutSettings";
 
 import type * as api from "../../types/types";
 import type * as channels from "../protocol/channels";
 
-type PausedDetail = { location: { file: string; line?: number; column?: number }; title: string };
+type PausedDetails = {
+  location: { file: string; line?: number; column?: number };
+  title: string;
+  stack?: string;
+};
 
 export class Debugger extends ChannelOwner<channels.DebuggerChannel> implements api.Debugger {
-  private _pausedDetails: PausedDetail[] = [];
+  private _pausedDetails: PausedDetails | null = null;
 
   static from(channel: channels.DebuggerChannel): Debugger {
     return (channel as any)._object;
@@ -38,28 +43,35 @@ export class Debugger extends ChannelOwner<channels.DebuggerChannel> implements 
   ) {
     super(parent, type, guid, initializer);
     this._channel.on("pausedStateChanged", ({ pausedDetails }) => {
-      this._pausedDetails = pausedDetails ?? [];
+      this._pausedDetails = pausedDetails ?? null;
       this.emit(Events.Debugger.PausedStateChanged);
+    });
+    this._channel.on("apiCallsUpdated", ({ apiCalls }) => {
+      this.emit(Events.Debugger.ApiCallsUpdated, apiCalls);
     });
   }
 
-  async pause(): Promise<void> {
-    await this._channel.pause();
+  async _enable(): Promise<void> {
+    await this._channel.enable({}, kNoTimeout);
+  }
+
+  async requestPause(): Promise<void> {
+    await this._channel.requestPause({}, kNoTimeout);
   }
 
   async resume(): Promise<void> {
-    await this._channel.resume();
+    await this._channel.resume({}, kNoTimeout);
   }
 
   async next(): Promise<void> {
-    await this._channel.next();
+    await this._channel.next({}, kNoTimeout);
   }
 
   async runTo(location: { file: string; line?: number; column?: number }): Promise<void> {
-    await this._channel.runTo({ location });
+    await this._channel.runTo({ location }, kNoTimeout);
   }
 
-  pausedDetails(): PausedDetail[] {
+  pausedDetails(): PausedDetails | null {
     return this._pausedDetails;
   }
 }

@@ -15,16 +15,18 @@
  * limitations under the License.
  */
 
-import { captureRawStack, parseStackFrame } from "../utils/isomorphic/stackTrace";
+import {
+  captureRawStack,
+  coreDir,
+  filterStackFile,
+  parseStackFrame,
+} from "../utils/isomorphic/stackTrace";
 
-import type { Platform } from "./platform";
-import type { StackFrame } from "@isomorphic/stackTrace";
+import type { StackFrame } from "../utils/isomorphic/stackTrace";
 
-export function captureLibraryStackTrace(platform: Platform): {
-  frames: StackFrame[];
-  apiName: string;
-} {
+export function captureLibraryStackTrace(): { frames: StackFrame[]; apiName: string } {
   const stack = captureRawStack();
+  const playwrightCoreDir = coreDir();
 
   type ParsedFrame = {
     frame: StackFrame;
@@ -33,13 +35,9 @@ export function captureLibraryStackTrace(platform: Platform): {
   };
   let parsedFrames = stack
     .map((line) => {
-      const frame = parseStackFrame(
-        line,
-        platform.pathSeparator,
-        platform.showInternalStackFrames()
-      );
+      const frame = parseStackFrame(line);
       if (!frame || !frame.file) return null;
-      const isPlaywrightLibrary = !!platform.coreDir && frame.file.startsWith(platform.coreDir);
+      const isPlaywrightLibrary = !!playwrightCoreDir && frame.file.startsWith(playwrightCoreDir);
       const parsed: ParsedFrame = {
         frame,
         frameText: line,
@@ -63,17 +61,14 @@ export function captureLibraryStackTrace(platform: Platform): {
 
   function normalizeAPIName(name?: string): string {
     if (!name) return "";
-    const match = name.match(/(API|JS|CDP|[A-Z])(.*)/);
+    // (\d) is to tolerate bundler renames Locator2 instead of Locator.
+    const match = name.match(/(API|JS|CDP|[A-Z])([^\d]+)\d?\.(.*)/);
     if (!match) return name;
-    return match[1].toLowerCase() + match[2];
+    return match[1].toLowerCase() + match[2] + "." + match[3];
   }
 
   // This is for the inspector so that it did not include the test runner stack frames.
-  const filterPrefixes = platform.boxedStackPrefixes();
-  parsedFrames = parsedFrames.filter((f) => {
-    if (filterPrefixes.some((prefix) => f.frame.file.startsWith(prefix))) return false;
-    return true;
-  });
+  parsedFrames = parsedFrames.filter((f) => filterStackFile(f.frame.file));
 
   return {
     frames: parsedFrames.map((p) => p.frame),

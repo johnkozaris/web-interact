@@ -17,6 +17,14 @@
 
 import { isString } from "./stringUtils";
 
+export function isHttpUrl(url: string, base?: string): boolean {
+  try {
+    return ["http:", "https:"].includes(new URL(url, base).protocol);
+  } catch {
+    return false;
+  }
+}
+
 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_expressions#escaping
 const escapedChars = new Set([
   "$",
@@ -70,10 +78,16 @@ export function globToRegexPattern(glob: string): string {
 
     switch (c) {
       case "{":
+        if (inGroup)
+          throw new Error(
+            `Invalid glob pattern ${JSON.stringify(glob)}: nested '{' is not supported`
+          );
         inGroup = true;
         tokens.push("(");
         break;
       case "}":
+        if (!inGroup)
+          throw new Error(`Invalid glob pattern ${JSON.stringify(glob)}: unmatched '}'`);
         inGroup = false;
         tokens.push(")");
         break;
@@ -88,6 +102,7 @@ export function globToRegexPattern(glob: string): string {
         tokens.push(escapedChars.has(c) ? "\\" + c : c);
     }
   }
+  if (inGroup) throw new Error(`Invalid glob pattern ${JSON.stringify(glob)}: unmatched '{'`);
   tokens.push("$");
   return tokens.join("");
 }
@@ -110,7 +125,7 @@ export type URLPattern = {
   username: string;
 };
 
-// @ts-expect-error URLPattern is not in @types/node yet
+// @ts-ignore URLPattern is not in @types/node yet
 // eslint-disable-next-line no-restricted-globals
 export const isURLPattern = (v: unknown): v is URLPattern =>
   typeof globalThis.URLPattern === "function" && v instanceof globalThis.URLPattern;
@@ -147,22 +162,27 @@ function deserializeURLPattern(
   v: ReturnType<typeof serializeURLPattern>
 ): URLPattern | ((url: URL) => boolean) {
   // Client is on Node 24+ and can use URLPattern, Server is not. Let's match all URLs on the server, they'll be filtered again on the client.
-  // @ts-expect-error URLPattern is not in @types/node yet
+  // @ts-ignore URLPattern is not in @types/node yet
   // eslint-disable-next-line no-restricted-globals
   if (typeof globalThis.URLPattern !== "function") return () => true;
 
-  // @ts-expect-error URLPattern is not in @types/node yet
+  // URLPattern does not expose ignoreCase, so match case-insensitively on the server
+  // to avoid false negatives. The client filters again with the original pattern.
+  // @ts-ignore URLPattern is not in @types/node yet
   // eslint-disable-next-line no-restricted-globals
-  return new globalThis.URLPattern({
-    hash: v.hash,
-    hostname: v.hostname,
-    password: v.password,
-    pathname: v.pathname,
-    port: v.port,
-    protocol: v.protocol,
-    search: v.search,
-    username: v.username,
-  });
+  return new globalThis.URLPattern(
+    {
+      hash: v.hash,
+      hostname: v.hostname,
+      password: v.password,
+      pathname: v.pathname,
+      port: v.port,
+      protocol: v.protocol,
+      search: v.search,
+      username: v.username,
+    },
+    { ignoreCase: true }
+  );
 }
 
 export function deserializeURLMatch(match: {
@@ -191,8 +211,8 @@ export function urlMatches(
   if (match === undefined || match === "") return true;
   if (isString(match)) match = new RegExp(resolveGlobToRegexPattern(baseURL, match, webSocketUrl));
   if (isRegExp(match)) {
-    const r = match.test(urlString);
-    return r;
+    match.lastIndex = 0;
+    return match.test(urlString);
   }
   const url = parseURL(urlString);
   if (!url) return false;
@@ -213,8 +233,12 @@ export function resolveGlobToRegexPattern(
 }
 
 function toWebSocketBaseUrl(baseURL: string | undefined) {
-  // Allow http(s) baseURL to match ws(s) urls.
-  if (baseURL && /^https?:\/\//.test(baseURL)) baseURL = baseURL.replace(/^http/, "ws");
+  // Allow http(s) baseURL to match ws(s) urls. Schemes are case-insensitive,
+  // same as elsewhere in this file, so 'HTTP://...' should be rewritten too.
+  if (baseURL && /^https?:\/\//i.test(baseURL))
+    baseURL = baseURL.replace(/^https?/i, (scheme) =>
+      scheme.toLowerCase() === "https" ? "wss" : "ws"
+    );
   return baseURL;
 }
 
@@ -252,6 +276,10 @@ function resolveGlobBase(baseURL: string | undefined, match: string): string {
           // Preserve explicit schema as is as it may affect trailing slashes after domain.
           return token;
         }
+        // Components without glob metacharacters are literal, so let them round-trip
+        // through new URL() to preserve normalization (default ports such as :80/:443,
+        // percent-encoding, IDN hosts). Only opaque tokens defeat that normalization.
+        if (!/[*?{}\\]/.test(token)) return token;
         const questionIndex = token.indexOf("?");
         if (questionIndex === -1) return mapToken(token, `$_${index}_$`);
         const newPrefix = mapToken(token.substring(0, questionIndex), `$_${index}_$`);
@@ -263,7 +291,10 @@ function resolveGlobBase(baseURL: string | undefined, match: string): string {
     let resolved = result.resolved;
     for (const [token, original] of tokenMap) {
       const normalize = result.caseInsensitivePart?.includes(token);
-      resolved = resolved.replace(token, normalize ? original.toLowerCase() : original);
+      const replacement = normalize ? original.toLowerCase() : original;
+      // '$$', '$&', '$`' and "$'" are special in String.prototype.replace with a string argument.
+      // Instead, use the function argument form that treats the string argument literally.
+      resolved = resolved.replace(token, () => replacement);
     }
     match = resolved;
   }

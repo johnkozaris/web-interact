@@ -16,17 +16,14 @@
  */
 
 type TypedArrayKind =
-  | "i8"
-  | "ui8"
-  | "ui8c"
-  | "i16"
-  | "ui16"
-  | "i32"
-  | "ui32"
-  | "f32"
-  | "f64"
-  | "bi64"
-  | "bui64";
+  "i8" | "ui8" | "ui8c" | "i16" | "ui16" | "i32" | "ui32" | "f32" | "f64" | "bi64" | "bui64";
+
+// Name prefix of the page bindings backing the functions passed to evaluate()
+// as arguments. Only functions carrying this prefix serialize as { fn },
+// arbitrary functions are dropped as before.
+export const kFunctionBindingPrefix = "__pw_fn_";
+
+export const kBindingsControllerProperty = "__playwright__binding__controller__";
 
 export type SerializedValue =
   | undefined
@@ -41,16 +38,20 @@ export type SerializedValue =
   | { r: { p: string; f: string } }
   | { a: SerializedValue[]; id: number }
   | { o: { k: string; v: SerializedValue }[]; id: number }
+  | { m: { k: SerializedValue; v: SerializedValue }[]; id: number }
+  | { s: SerializedValue[]; id: number }
   | { ref: number }
   | { h: number }
+  | { fn: string }
   | { ta: { b: string; k: TypedArrayKind } }
   | { ab: { b: string } };
 
-type HandleOrValue = { h: number } | { fallThrough: any };
+type HandleOrValue = { h: number } | { fn: string } | { fallThrough: any };
 
 type VisitorInfo = {
   visited: Map<object, number>;
   lastId: number;
+  extendedSerialization?: boolean;
 };
 
 function isRegExp(obj: any): obj is RegExp {
@@ -107,6 +108,22 @@ function isArrayBuffer(obj: any): obj is ArrayBuffer {
   }
 }
 
+function isMap(obj: any): obj is Map<unknown, unknown> {
+  try {
+    return obj instanceof Map || Object.prototype.toString.call(obj) === "[object Map]";
+  } catch (error) {
+    return false;
+  }
+}
+
+function isSet(obj: any): obj is Set<unknown> {
+  try {
+    return obj instanceof Set || Object.prototype.toString.call(obj) === "[object Set]";
+  } catch (error) {
+    return false;
+  }
+}
+
 const typedArrayConstructors: Record<TypedArrayKind, Function> = {
   i8: Int8Array,
   ui8: Uint8Array,
@@ -122,7 +139,7 @@ const typedArrayConstructors: Record<TypedArrayKind, Function> = {
   bui64: BigUint64Array,
 };
 
-function typedArrayToBase64(array: any) {
+export function typedArrayToBase64(array: any) {
   /**
    * Firefox does not support iterating over typed arrays, so we use `.toBase64`.
    * Error: 'Accessing TypedArray data over Xrays is slow, and forbidden in order to encourage performant code. To copy TypedArrays across origin boundaries, consider using Components.utils.cloneInto().'
@@ -186,7 +203,29 @@ export function parseEvaluationResultValue(
       }
       return result;
     }
+    if ("m" in value) {
+      const result = new Map();
+      refs.set(value.id, result);
+      for (const { k, v } of value.m)
+        result.set(
+          parseEvaluationResultValue(k, handles, refs),
+          parseEvaluationResultValue(v, handles, refs)
+        );
+      return result;
+    }
+    if ("s" in value) {
+      const result = new Set();
+      refs.set(value.id, result);
+      for (const item of value.s) result.add(parseEvaluationResultValue(item, handles, refs));
+      return result;
+    }
     if ("h" in value) return handles[value.h];
+    if ("fn" in value) {
+      const name = value.fn;
+      // eslint-disable-next-line no-restricted-globals
+      return (...args: any[]) =>
+        (globalThis as any)[kBindingsControllerProperty].callBinding(name, ...args);
+    }
     if ("ta" in value) return base64ToTypedArray(value.ta.b, typedArrayConstructors[value.ta.k]);
     if ("ab" in value) return base64ToTypedArray(value.ab.b, Uint8Array).buffer;
   }
@@ -195,9 +234,14 @@ export function parseEvaluationResultValue(
 
 export function serializeAsCallArgument(
   value: any,
-  handleSerializer: (value: any) => HandleOrValue
+  handleSerializer: (value: any) => HandleOrValue,
+  options: { extendedSerialization?: boolean } = {}
 ): SerializedValue {
-  return serialize(value, handleSerializer, { visited: new Map(), lastId: 0 });
+  return serialize(value, handleSerializer, {
+    visited: new Map(),
+    lastId: 0,
+    extendedSerialization: options.extendedSerialization,
+  });
 }
 
 function serialize(
@@ -262,6 +306,38 @@ function innerSerialize(
   const id = visitorInfo.visited.get(value);
   if (id) return { ref: id };
 
+  if (visitorInfo.extendedSerialization) {
+    if (isMap(value)) {
+      const m: { k: SerializedValue; v: SerializedValue }[] = [];
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
+      const iterator = value.entries();
+      const next = new Map().entries().next;
+      while (true) {
+        const entry = next.call(iterator);
+        if (entry.done) break;
+        m.push({
+          k: serialize(entry.value[0], handleSerializer, visitorInfo),
+          v: serialize(entry.value[1], handleSerializer, visitorInfo),
+        });
+      }
+      return { m, id };
+    }
+    if (isSet(value)) {
+      const s: SerializedValue[] = [];
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
+      const iterator = value.values();
+      const next = new Set().values().next;
+      while (true) {
+        const entry = next.call(iterator);
+        if (entry.done) break;
+        s.push(serialize(entry.value, handleSerializer, visitorInfo));
+      }
+      return { s, id };
+    }
+  }
+
   if (Array.isArray(value)) {
     const a = [];
     const id = ++visitorInfo.lastId;
@@ -296,4 +372,7 @@ function innerSerialize(
 
     return { o, id };
   }
+
+  if (typeof value === "function" && value.name.startsWith(kFunctionBindingPrefix))
+    return { fn: value.name };
 }

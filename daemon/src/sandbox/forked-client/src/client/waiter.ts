@@ -15,49 +15,78 @@
  * limitations under the License.
  */
 
-import { TimeoutError } from "./errors";
 import { rewriteErrorMessage } from "../utils/isomorphic/stackTrace";
+import { createGuid } from "../utils/crypto";
+import { currentZone } from "../utils/zones";
+import { AbortError, TimeoutError } from "./errors";
 
 import type { ChannelOwner } from "./channelOwner";
 import type * as channels from "../protocol/channels";
 import type { EventEmitter } from "events";
-import type { Zone } from "./platform";
+import type { Zone } from "../utils/zones";
 
 export class Waiter {
   private _dispose: (() => void)[];
   private _failures: Promise<any>[] = [];
   private _immediateError?: Error;
   private _logs: string[] = [];
-  private _channelOwner: ChannelOwner<channels.EventTargetChannel>;
+  private _channelOwner: ChannelOwner;
   private _waitId: string;
   private _error: string | undefined;
   private _savedZone: Zone;
 
-  constructor(channelOwner: ChannelOwner<channels.EventTargetChannel>, event: string) {
-    this._waitId = channelOwner._platform.createGuid();
+  constructor(channelOwner: ChannelOwner, event: string) {
+    this._waitId = createGuid();
     this._channelOwner = channelOwner;
-    this._savedZone = channelOwner._platform.zones.current().pop();
+    this._savedZone = currentZone().without("apiZone");
 
-    this._channelOwner._channel
-      .waitForEventInfo({ info: { waitId: this._waitId, phase: "before", event } })
-      .catch(() => {});
+    const title = `Wait for event "${event}"`;
+    this._sendWaitInfo({ waitId: this._waitId, phase: "before", event }, { title });
     this._dispose = [
       () =>
-        this._channelOwner
-          ._wrapApiCall(
-            async () => {
-              await this._channelOwner._channel.waitForEventInfo({
-                info: { waitId: this._waitId, phase: "after", error: this._error },
-              });
-            },
-            { internal: true }
-          )
-          .catch(() => {}),
+        this._sendWaitInfo(
+          { waitId: this._waitId, phase: "after", error: this._error },
+          { internal: true }
+        ),
     ];
   }
 
-  static createForEvent(channelOwner: ChannelOwner<channels.EventTargetChannel>, event: string) {
+  static createForEvent(channelOwner: ChannelOwner, event: string) {
     return new Waiter(channelOwner, event);
+  }
+
+  private _sendWaitInfo(
+    info: channels.WaitInfo,
+    options: { title?: string; internal?: boolean }
+  ): void {
+    // Fire-and-forget: server intentionally never replies, and we never throw to the caller.
+    const owner = this._channelOwner;
+    owner
+      ._wrapApiCall(async (apiZone) => {
+        if (apiZone.internal || apiZone.reported) {
+          void owner._connection.sendMessageToServer(owner, "__waitInfo__", info, {
+            internal: true,
+            timeout: 0,
+          });
+          return;
+        }
+        apiZone.reported = true;
+        // An outer `_wrapApiCall` may have set its own title (e.g. "Wait for navigation");
+        // fall back to ours only when the outer zone left it blank. The title is read both by
+        // `onApiCallBegin` (drives the test runner step title) and by `sendMessageToServer`
+        // (drives the trace viewer action title), so set it on the zone itself.
+        if (!apiZone.title) apiZone.title = options.title;
+        owner._instrumentation.onApiCallBegin(apiZone, {
+          type: owner._type,
+          method: "__waitInfo__",
+          params: info,
+        });
+        void owner._connection.sendMessageToServer(owner, "__waitInfo__", info, {
+          ...apiZone,
+          timeout: 0,
+        });
+      }, options)
+      .catch(() => {});
   }
 
   async waitForEvent<T = void>(
@@ -84,19 +113,36 @@ export class Waiter {
     );
   }
 
-  rejectOnTimeout(timeout: number, message: string) {
-    if (!timeout) return;
-    const { promise, dispose } = waitForTimeout(timeout);
-    this._rejectOn(
-      promise.then(() => {
-        throw new TimeoutError(message);
-      }),
-      dispose
-    );
+  rejectOnTimeout({ timeout, signal }: channels.TimeoutOptions, timeoutMessage: string) {
+    if (signal) {
+      if (signal.aborted)
+        return this.rejectImmediately(new AbortError(undefined, { cause: signal.reason }));
+      let rejectPromise: (e: any) => void;
+      const promise = new Promise<void>((_, reject) => {
+        rejectPromise = reject;
+      });
+      const listener = () => rejectPromise!(new AbortError(undefined, { cause: signal.reason }));
+      signal.addEventListener("abort", listener, { once: true });
+      this._rejectOn(promise, () => signal.removeEventListener("abort", listener));
+    }
+
+    if (timeout) {
+      const { promise, dispose } = waitForTimeout(timeout);
+      this._rejectOn(
+        promise.then(() => {
+          throw new TimeoutError(timeoutMessage);
+        }),
+        dispose
+      );
+    }
   }
 
   rejectImmediately(error: Error) {
     this._immediateError = error;
+  }
+
+  throwIfImmediatelyRejected() {
+    if (this._immediateError) throw this._immediateError;
   }
 
   dispose() {
@@ -120,16 +166,7 @@ export class Waiter {
 
   log(s: string) {
     this._logs.push(s);
-    this._channelOwner
-      ._wrapApiCall(
-        async () => {
-          await this._channelOwner._channel.waitForEventInfo({
-            info: { waitId: this._waitId, phase: "log", message: s },
-          });
-        },
-        { internal: true }
-      )
-      .catch(() => {});
+    this._sendWaitInfo({ waitId: this._waitId, phase: "log", message: s }, { internal: true });
   }
 
   private _rejectOn(promise: Promise<any>, dispose?: () => void) {

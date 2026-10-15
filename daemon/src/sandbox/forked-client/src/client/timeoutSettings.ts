@@ -20,18 +20,22 @@ import {
   DEFAULT_PLAYWRIGHT_LAUNCH_TIMEOUT,
   DEFAULT_PLAYWRIGHT_TIMEOUT,
 } from "../utils/isomorphic/time";
+import { debugMode } from "../utils/debug";
 
-import type { Platform } from "./platform";
+import type * as channels from "../protocol/channels";
+
+type TimeoutInput = { timeout?: number; signal?: AbortSignal };
+
+// Sentinel for internal calls that intentionally opt out of a deadline.
+export const kNoTimeout: channels.TimeoutOptions = { signal: undefined, timeout: 0 };
 
 export class TimeoutSettings {
   private _parent: TimeoutSettings | undefined;
   private _defaultTimeout: number | undefined;
   private _defaultNavigationTimeout: number | undefined;
-  private _platform: Platform;
 
-  constructor(platform: Platform, parent?: TimeoutSettings) {
+  constructor(parent?: TimeoutSettings) {
     this._parent = parent;
-    this._platform = platform;
   }
 
   setDefaultTimeout(timeout: number | undefined) {
@@ -50,27 +54,39 @@ export class TimeoutSettings {
     return this._defaultTimeout;
   }
 
-  navigationTimeout(options: { timeout?: number }): number {
+  navigationTimeout(options: TimeoutInput): channels.TimeoutOptions {
+    return { signal: options.signal, timeout: this._navigationTimeout(options) };
+  }
+
+  timeout(options: TimeoutInput): channels.TimeoutOptions {
+    return { signal: options.signal, timeout: this._timeout(options) };
+  }
+
+  launchTimeout(options: TimeoutInput): channels.TimeoutOptions {
+    return { signal: options.signal, timeout: this._launchTimeout(options) };
+  }
+
+  private _navigationTimeout(options: { timeout?: number }): number {
     if (typeof options.timeout === "number") return options.timeout;
     if (this._defaultNavigationTimeout !== undefined) return this._defaultNavigationTimeout;
-    if (this._platform.isDebugMode()) return 0;
+    if (debugMode() === "inspector") return 0;
     if (this._defaultTimeout !== undefined) return this._defaultTimeout;
-    if (this._parent) return this._parent.navigationTimeout(options);
+    if (this._parent) return this._parent._navigationTimeout(options);
     return DEFAULT_PLAYWRIGHT_TIMEOUT;
   }
 
-  timeout(options: { timeout?: number }): number {
+  private _timeout(options: { timeout?: number }): number {
     if (typeof options.timeout === "number") return options.timeout;
-    if (this._platform.isDebugMode()) return 0;
+    if (debugMode() === "inspector") return 0;
     if (this._defaultTimeout !== undefined) return this._defaultTimeout;
-    if (this._parent) return this._parent.timeout(options);
+    if (this._parent) return this._parent._timeout(options);
     return DEFAULT_PLAYWRIGHT_TIMEOUT;
   }
 
-  launchTimeout(options: { timeout?: number }): number {
+  private _launchTimeout(options: { timeout?: number }): number {
     if (typeof options.timeout === "number") return options.timeout;
-    if (this._platform.isDebugMode()) return 0;
-    if (this._parent) return this._parent.launchTimeout(options);
+    if (debugMode() === "inspector") return 0;
+    if (this._parent) return this._parent._launchTimeout(options);
     return DEFAULT_PLAYWRIGHT_LAUNCH_TIMEOUT;
   }
 }

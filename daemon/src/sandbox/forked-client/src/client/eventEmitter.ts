@@ -23,8 +23,11 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+import { EventEmitter as NodeEventEmitter } from "events";
+
+import { isUnderTest } from "../utils/debug";
+
 import type { EventEmitter as EventEmitterType } from "events";
-import type { Platform } from "./platform";
 
 type EventType = string | symbol;
 type Listener = (...args: any[]) => any;
@@ -36,10 +39,8 @@ export class EventEmitter implements EventEmitterType {
   private _maxListeners: number | undefined = undefined;
   readonly _pendingHandlers = new Map<EventType, Set<Promise<void>>>();
   private _rejectionHandler: ((error: Error) => void) | undefined;
-  readonly _platform: Platform;
 
-  constructor(platform: Platform) {
-    this._platform = platform;
+  constructor() {
     if (this._events === undefined || this._events === Object.getPrototypeOf(this)._events) {
       this._events = Object.create(null);
       this._eventsCount = 0;
@@ -60,7 +61,7 @@ export class EventEmitter implements EventEmitterType {
 
   getMaxListeners(): number {
     return this._maxListeners === undefined
-      ? this._platform.defaultMaxListeners()
+      ? NodeEventEmitter.defaultMaxListeners
       : this._maxListeners;
   }
 
@@ -159,7 +160,7 @@ export class EventEmitter implements EventEmitterType {
         w.emitter = this;
         w.type = type;
         w.count = existing.length;
-        if (!this._platform.isUnderTest()) {
+        if (!isUnderTest()) {
           // eslint-disable-next-line no-console
           console.warn(w);
         }

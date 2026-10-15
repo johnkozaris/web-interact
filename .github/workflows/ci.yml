@@ -6,22 +6,36 @@ on:
   pull_request:
     branches: [main]
 
-jobs:
-  check:
-    name: Typecheck + Test + Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+permissions:
+  contents: read
 
-      - uses: actions/setup-node@v4
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  daemon:
+    name: Daemon (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node }}
 
       - name: Enable corepack
         run: corepack enable
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Repo policy
+        run: pnpm run verify:repo
 
       - name: Install browsers
         run: pnpm --dir daemon exec patchright install --with-deps chromium
@@ -32,11 +46,24 @@ jobs:
       - name: Test
         run: pnpm run test
 
+      # The CLI embeds daemon/dist at compile time, so the committed bundles
+      # must match what the current sources and dependencies produce.
+      - name: Check committed bundles are current
+        run: |
+          pnpm run bundle
+          git diff --exit-code --stat daemon/dist
+
+  cli:
+    name: CLI build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -45,4 +72,7 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
 
       - name: Build CLI
-        run: cargo build --release
+        run: cargo build --release --locked
+
+      - name: Test CLI
+        run: cargo test --release --locked

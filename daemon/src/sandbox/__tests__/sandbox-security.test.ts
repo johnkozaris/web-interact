@@ -37,7 +37,7 @@ function createOutput(): CapturedOutput & {
   };
 }
 
-describe.sequential("QuickJS sandbox security", () => {
+describe("QuickJS sandbox security", () => {
   let browserRootDir = "";
   let manager: BrowserManager;
 

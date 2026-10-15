@@ -17,6 +17,7 @@
  */
 
 import type { Size } from "../utils/isomorphic/types";
+import type { HttpCredentials } from "../protocol/structs";
 import type * as channels from "../protocol/channels";
 export type { HeadersArray, Point, Quad, Rect, Size } from "../utils/isomorphic/types";
 
@@ -32,7 +33,7 @@ export interface Logger {
   ): void;
 }
 
-export type TimeoutOptions = { timeout?: number };
+export type TimeoutOptions = { timeout?: number; signal?: AbortSignal };
 export type StrictOptions = { strict?: boolean };
 export type Headers = { [key: string]: string };
 
@@ -47,6 +48,10 @@ export type SelectOption = {
 };
 export type SelectOptionOptions = TimeoutOptions & { force?: boolean };
 export type FilePayload = { name: string; mimeType: string; buffer: Buffer };
+export type DropPayload = {
+  files?: string | FilePayload | string[] | FilePayload[];
+  data?: { [mimeType: string]: string };
+};
 export type StorageState = {
   cookies: channels.NetworkCookie[];
   origins: Omit<channels.OriginStorage, "indexedDB">[];
@@ -54,6 +59,7 @@ export type StorageState = {
 export type SetStorageState = {
   cookies?: channels.SetNetworkCookie[];
   origins?: (Omit<channels.SetOriginStorage, "indexedDB"> & { indexedDB?: unknown[] })[];
+  credentials?: unknown[];
 };
 
 export type LifecycleEvent = channels.LifecycleEvent;
@@ -89,12 +95,12 @@ export type BrowserContextOptions = Omit<
   | "acceptDownloads"
   | "contrast"
   | "agent"
+  | "httpCredentials"
 > & {
   viewport?: Size | null;
   extraHTTPHeaders?: Headers;
+  httpCredentials?: HttpCredentials | HttpCredentials[];
   logger?: Logger;
-  videosPath?: string;
-  videoSize?: Size;
   storageState?: string | SetStorageState;
   har?: {
     path: string;
@@ -140,7 +146,6 @@ export type ConnectOptions = {
   exposeNetwork?: string;
   slowMo?: number;
   timeout?: number;
-  logger?: Logger;
 };
 export type LaunchServerOptions = LaunchOptions & {
   host?: string;
@@ -177,10 +182,14 @@ export type SelectorEngine = {
   queryAll(root: HTMLElement, selector: string): HTMLElement[];
 };
 
+export type AnnotatePosition =
+  "top-left" | "top" | "top-right" | "bottom-left" | "bottom" | "bottom-right";
+export type AnnotateOptions = { duration?: number; position?: AnnotatePosition; fontSize?: number };
+
 export type RemoteAddr = channels.RemoteAddr;
 export type SecurityDetails = channels.SecurityDetails;
 
 export type FrameExpectParams = Omit<
   channels.FrameExpectParams,
   "selector" | "expression" | "expectedValue"
-> & { expectedValue?: any };
+> & { expectedValue?: any; timeout: number; signal?: AbortSignal; title?: string };

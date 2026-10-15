@@ -1,6 +1,5 @@
 import {
-  Connection,
-  nodePlatform,
+  createClientConnection,
   type ClientConnectionLike,
   type PlaywrightClientLike,
   type WireMessage,
@@ -17,7 +16,7 @@ export class SandboxTransport {
   private readonly sendToHost: (json: string) => void;
 
   constructor(options: SandboxTransportOptions) {
-    this.connection = options.connection ?? new Connection(nodePlatform);
+    this.connection = options.connection ?? createClientConnection();
     this.sendToHost = options.sendToHost;
     this.connection.onmessage = (message) => {
       this.send(message);

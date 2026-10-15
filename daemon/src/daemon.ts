@@ -24,8 +24,8 @@ const PID_PATH = getPidPath();
 const BROWSERS_DIR = getBrowsersDir();
 const DEFAULT_SCRIPT_TIMEOUT_MS = 20_000;
 const SOCKET_CLOSE_TIMEOUT_MS = 500;
-const PLAYWRIGHT_VERSION = "1.59.1";
-const PATCHRIGHT_VERSION = "1.59.1";
+const PLAYWRIGHT_VERSION = "1.64.0";
+const PATCHRIGHT_VERSION = "1.64.0";
 const QUICKJS_VERSION = "0.32.0";
 
 function buildRuntimePackageJson(): string {
@@ -40,7 +40,7 @@ function buildRuntimePackageJson(): string {
       name: "web-interact-runtime",
       private: true,
       type: "module",
-      packageManager: "pnpm@10.33.0",
+      packageManager: "pnpm@12.11.2",
       dependencies: { ...deps, "quickjs-emscripten": QUICKJS_VERSION },
     },
     null,
@@ -293,7 +293,7 @@ async function runPackageManagerCommand(
   }
 
   throw new Error(
-    `Could not find \`pnpm\` or \`corepack\` in PATH while setting up the embedded daemon runtime in ${cwd}. Install pnpm 10 or enable Corepack and try again.`
+    `Could not find \`pnpm\` or \`corepack\` in PATH while setting up the embedded daemon runtime in ${cwd}. Install pnpm 12 or enable Corepack and try again.`
   );
 }
 

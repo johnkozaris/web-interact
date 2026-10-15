@@ -2,7 +2,7 @@
 /**
  * Copyright (c) Microsoft Corporation.
  *
- * Licensed under the Apache License, Version 2.0 (the 'License");
+ * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
@@ -15,17 +15,19 @@
  * limitations under the License.
  */
 
-import { EventEmitter } from "./eventEmitter";
+import { getMetainfo } from "../utils/isomorphic/protocolMetainfo";
+import { showInternalStackFrames, stringifyStackFrames } from "../utils/isomorphic/stackTrace";
+import { isUnderTest } from "../utils/debug";
+import { debugLogger } from "../utils/debugLogger";
+import { currentZone } from "../utils/zones";
 import { ValidationError, maybeFindValidator } from "../protocol/validator";
-import { methodMetainfo } from "../utils/isomorphic/protocolMetainfo";
+import { EventEmitter } from "./eventEmitter";
 import { captureLibraryStackTrace } from "./clientStackTrace";
-import { stringifyStackFrames } from "../utils/isomorphic/stackTrace";
 
 import type { ClientInstrumentation } from "./clientInstrumentation";
 import type { Connection } from "./connection";
 import type { Logger } from "./types";
 import type { ValidatorContext } from "../protocol/validator";
-import type { Platform } from "./platform";
 import type * as channels from "../protocol/channels";
 
 type Listener = (...args: any[]) => void;
@@ -53,7 +55,7 @@ export abstract class ChannelOwner<
     initializer: channels.InitializerTraits<T>
   ) {
     const connection = parent instanceof ChannelOwner ? parent._connection : parent;
-    super(connection._platform);
+    super();
     this.setMaxListeners(0);
     this._connection = connection;
     this._type = type;
@@ -67,7 +69,7 @@ export abstract class ChannelOwner<
       this._logger = this._parent._logger;
     }
 
-    this._channel = this._createChannel(new EventEmitter(connection._platform));
+    this._channel = this._createChannel(new EventEmitter());
     this._initializer = initializer;
   }
 
@@ -117,6 +119,15 @@ export abstract class ChannelOwner<
     child._parent = this;
   }
 
+  _parentOfType(type: string): ChannelOwner<any> | undefined {
+    let parent: ChannelOwner<any> | undefined = this._parent;
+    while (parent) {
+      if (parent._type === type) return parent;
+      parent = parent._parent;
+    }
+    return undefined;
+  }
+
   _dispose(reason: "gc" | undefined) {
     // Clean up from parent and connection.
     if (this._parent) this._parent._objects.delete(this._guid);
@@ -139,7 +150,7 @@ export abstract class ChannelOwner<
     return {
       tChannelImpl: tChannelImplToWire,
       binary: this._connection.rawBuffers() ? "buffer" : "toBase64",
-      isUnderTest: () => this._platform.isUnderTest(),
+      isUnderTest,
     };
   }
 
@@ -148,12 +159,16 @@ export abstract class ChannelOwner<
       get: (obj: any, prop: string | symbol) => {
         if (typeof prop === "string") {
           const validator = maybeFindValidator(this._type, prop, "Params");
-          const { internal } = methodMetainfo.get(this._type + "." + prop) || {};
+          const { internal } = getMetainfo({ type: this._type, method: prop }) || {};
           if (validator) {
-            return async (params: any) => {
+            return async (
+              params: any,
+              options: { signal?: AbortSignal; timeout?: number } = {}
+            ) => {
               return await this._wrapApiCall(
                 async (apiZone) => {
                   const validatedParams = validator(params, "", this._validatorToWireContext());
+                  const { signal, timeout = 0 } = options;
                   if (!apiZone.internal && !apiZone.reported) {
                     // Reporting/tracing/logging this api call for the first time.
                     apiZone.reported = true;
@@ -162,18 +177,19 @@ export abstract class ChannelOwner<
                       method: prop,
                       params,
                     });
-                    logApiCall(this._platform, this._logger, `=> ${apiZone.apiName} started`);
-                    return await this._connection.sendMessageToServer(
-                      this,
-                      prop,
-                      validatedParams,
-                      apiZone
-                    );
+                    logApiCall(this._logger, `=> ${apiZone.apiName} started`);
+                    return await this._connection.sendMessageToServer(this, prop, validatedParams, {
+                      ...apiZone,
+                      signal,
+                      timeout,
+                    });
                   }
                   // Since this api call is either internal, or has already been reported/traced once,
                   // passing as internal.
                   return await this._connection.sendMessageToServer(this, prop, validatedParams, {
                     internal: true,
+                    signal,
+                    timeout,
                   });
                 },
                 { internal }
@@ -193,33 +209,34 @@ export abstract class ChannelOwner<
     options?: { internal?: boolean; title?: string }
   ): Promise<R> {
     const logger = this._logger;
-    const existingApiZone = this._platform.zones.current().data<ApiZone>();
+    const existingApiZone = currentZone().data<ApiZone>("apiZone");
     if (existingApiZone) return await func(existingApiZone);
 
-    const stackTrace = captureLibraryStackTrace(this._platform);
+    const stackTrace = captureLibraryStackTrace();
+    let apiName = stackTrace.apiName;
+    if (apiName.startsWith("_") || apiName.includes("._")) apiName = options?.title ?? apiName;
     const apiZone: ApiZone = {
       title: options?.title,
-      apiName: stackTrace.apiName,
+      apiName,
       frames: stackTrace.frames,
       internal: options?.internal ?? false,
       reported: false,
       userData: undefined,
-      stepId: undefined,
+      callId: undefined,
     };
 
     try {
-      const result = await this._platform.zones
-        .current()
-        .push(apiZone)
+      const result = await currentZone()
+        .with("apiZone", apiZone)
         .run(async () => await func(apiZone));
       if (!options?.internal) {
-        logApiCall(this._platform, logger, `<= ${apiZone.apiName} succeeded`);
+        logApiCall(logger, `<= ${apiZone.apiName} succeeded`);
         this._instrumentation.onApiCallEnd(apiZone);
       }
       return result;
     } catch (e) {
       const innerError =
-        (this._platform.showInternalStackFrames() || this._platform.isUnderTest()) && e.stack
+        (showInternalStackFrames() || isUnderTest()) && e.stack
           ? "\n<inner error>\n" + e.stack
           : "";
       if (apiZone.apiName && !apiZone.apiName.includes("<anonymous>"))
@@ -229,7 +246,7 @@ export abstract class ChannelOwner<
       else e.stack = "";
       if (!options?.internal) {
         apiZone.error = e;
-        logApiCall(this._platform, logger, `<= ${apiZone.apiName} failed`);
+        logApiCall(logger, `<= ${apiZone.apiName} failed`);
         this._instrumentation.onApiCallEnd(apiZone);
       }
       throw e;
@@ -248,10 +265,10 @@ export abstract class ChannelOwner<
   }
 }
 
-function logApiCall(platform: Platform, logger: Logger | undefined, message: string) {
+function logApiCall(logger: Logger | undefined, message: string) {
   if (logger && logger.isEnabled("api", "info"))
     logger.log("api", "info", message, [], { color: "cyan" });
-  platform.log("api", message);
+  debugLogger.log("api", message);
 }
 
 function tChannelImplToWire(
@@ -272,6 +289,6 @@ type ApiZone = {
   internal?: boolean;
   reported: boolean;
   userData: any;
-  stepId?: string;
+  callId?: string;
   error?: Error;
 };

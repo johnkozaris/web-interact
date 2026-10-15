@@ -16,13 +16,18 @@
  * limitations under the License.
  */
 
-import { Artifact } from "./artifact";
+import path from "path";
+
+import { headersObjectToArray } from "../utils/isomorphic/headers";
+import { urlMatchesEqual } from "../utils/isomorphic/urlMatch";
+import { rewriteErrorMessage } from "../utils/isomorphic/stackTrace";
 import { Browser } from "./browser";
 import { CDPSession } from "./cdpSession";
 import { ChannelOwner } from "./channelOwner";
 import { evaluationScript } from "./clientHelper";
 import { Clock } from "./clock";
 import { ConsoleMessage } from "./consoleMessage";
+import { Credentials } from "./credentials";
 import { Dialog } from "./dialog";
 import { DisposableObject, DisposableStub } from "./disposable";
 import { TargetClosedError, parseError } from "./errors";
@@ -30,19 +35,17 @@ import { Events } from "./events";
 import { APIRequestContext } from "./fetch";
 import { Frame } from "./frame";
 import { HarRouter } from "./harRouter";
+import { assertEvaluateOptions } from "./jsHandle";
 import * as network from "./network";
-import { BindingCall, Page } from "./page";
+import { BindingCall, Page, addInitScriptWithExposedFunctions } from "./page";
 import { Tracing } from "./tracing";
 import { Waiter } from "./waiter";
 import { WebError } from "./webError";
 import { Worker } from "./worker";
-import { TimeoutSettings } from "./timeoutSettings";
+import { TimeoutSettings, kNoTimeout } from "./timeoutSettings";
 import { readTempFile, writeTempFile } from "./fileUtils";
-import { headersArrayToObject, headersObjectToArray } from "../utils/isomorphic/headers";
-import { urlMatchesEqual } from "../utils/isomorphic/urlMatch";
-import { isRegExp, isString } from "../utils/isomorphic/rtti";
-import { rewriteErrorMessage } from "../utils/isomorphic/stackTrace";
 
+import type { ExposeFunctionsOptions } from "./jsHandle";
 import type {
   BrowserContextOptions,
   Headers,
@@ -50,17 +53,17 @@ import type {
   StorageState,
   WaitForEventOptions,
 } from "./types";
+import type { HttpCredentials } from "../protocol/structs";
 import type * as structs from "../../types/structs";
 import type * as api from "../../types/types";
 import type { URLMatch } from "../utils/isomorphic/urlMatch";
-import type { Platform } from "./platform";
 import type * as channels from "../protocol/channels";
-import type * as actions from "../../types/recorder-actions";
+import type * as actions from "../utils/isomorphic/codegen/actions";
 
 interface RecorderEventSink {
-  actionAdded?(page: Page, actionInContext: actions.ActionInContext, code: string): void;
-  actionUpdated?(page: Page, actionInContext: actions.ActionInContext, code: string): void;
-  signalAdded?(page: Page, signal: actions.SignalInContext): void;
+  actionAdded?(page: Page, action: actions.Action, code: string): void;
+  actionUpdated?(page: Page, action: actions.Action, code: string): void;
+  signalAdded?(page: Page, signal: actions.Signal, code: string): void;
 }
 
 export class BrowserContext
@@ -82,12 +85,9 @@ export class BrowserContext
   readonly request: APIRequestContext;
   readonly tracing: Tracing;
   readonly clock: Clock;
+  readonly credentials: Credentials;
 
   readonly _serviceWorkers = new Set<Worker>();
-  private _harRecorders = new Map<
-    string,
-    { path: string; content: "embed" | "attach" | "omit" | undefined }
-  >();
   private _closingStatus: "none" | "closing" | "closed" = "none";
   private _closeReason: string | undefined;
   private _harRouters: HarRouter[] = [];
@@ -109,11 +109,12 @@ export class BrowserContext
   ) {
     super(parent, type, guid, initializer);
     this._options = initializer.options;
-    this._timeoutSettings = new TimeoutSettings(this._platform);
+    this._timeoutSettings = new TimeoutSettings();
     this.tracing = Tracing.from(initializer.tracing);
     this.request = APIRequestContext.from(initializer.requestContext);
     this.request._timeoutSettings = this._timeoutSettings;
     this.clock = new Clock(this);
+    this.credentials = new Credentials(this);
 
     this._channel.on("bindingCall", ({ binding }) => this._onBinding(BindingCall.from(binding)));
     this._channel.on("close", () => this._onClose());
@@ -131,7 +132,7 @@ export class BrowserContext
     this._channel.on("console", (event) => {
       const worker = Worker.fromNullable(event.worker);
       const page = Page.fromNullable(event.page);
-      const consoleMessage = new ConsoleMessage(this._platform, event, page, worker);
+      const consoleMessage = new ConsoleMessage(event, page, worker);
       worker?.emit(Events.Worker.Console, consoleMessage);
       page?.emit(Events.Page.Console, consoleMessage);
       if (worker && this._serviceWorkers.has(worker)) {
@@ -142,10 +143,10 @@ export class BrowserContext
       }
       this.emit(Events.BrowserContext.Console, consoleMessage);
     });
-    this._channel.on("pageError", ({ error, page }) => {
+    this._channel.on("pageError", ({ error, page, location }) => {
       const pageObject = Page.from(page);
       const parsedError = parseError(error);
-      this.emit(Events.BrowserContext.WebError, new WebError(pageObject, parsedError));
+      this.emit(Events.BrowserContext.WebError, new WebError(pageObject, parsedError, location));
       if (pageObject) pageObject.emit(Events.Page.PageError, parsedError);
     });
     this._channel.on("dialog", ({ dialog }) => {
@@ -158,9 +159,15 @@ export class BrowserContext
         // on the client side due to a possible race condition between two async calls:
         // a) removing "dialog" listener subscription (client->server)
         // b) actual "dialog" event (server->client)
-        if (dialogObject.type() === "beforeunload") dialog.accept({}).catch(() => {});
-        else dialog.dismiss().catch(() => {});
+        if (dialogObject.type() === "beforeunload") dialog.accept({}, kNoTimeout).catch(() => {});
+        else dialog.dismiss({}, kNoTimeout).catch(() => {});
       }
+    });
+    this._channel.on("dialogClosed", ({ dialog }) => {
+      const dialogObject = Dialog.from(dialog);
+      this.emit(Events.BrowserContext.DialogClosed, dialogObject);
+      const page = dialogObject.page();
+      if (page) page.emit(Events.Page.DialogClosed, dialogObject);
     });
     this._channel.on("request", ({ request, page }) =>
       this._onRequest(network.Request.from(request), Page.fromNullable(page))
@@ -179,19 +186,11 @@ export class BrowserContext
     );
     this._channel.on("recorderEvent", ({ event, data, page, code }) => {
       if (event === "actionAdded")
-        this._onRecorderEventSink?.actionAdded?.(
-          Page.from(page),
-          data as actions.ActionInContext,
-          code
-        );
+        this._onRecorderEventSink?.actionAdded?.(Page.from(page), data as actions.Action, code);
       else if (event === "actionUpdated")
-        this._onRecorderEventSink?.actionUpdated?.(
-          Page.from(page),
-          data as actions.ActionInContext,
-          code
-        );
+        this._onRecorderEventSink?.actionUpdated?.(Page.from(page), data as actions.Action, code);
       else if (event === "signalAdded")
-        this._onRecorderEventSink?.signalAdded?.(Page.from(page), data as actions.SignalInContext);
+        this._onRecorderEventSink?.signalAdded?.(Page.from(page), data as actions.Signal, code);
     });
     this._closedPromise = new Promise((f) => this.once(Events.BrowserContext.Close, f));
 
@@ -199,6 +198,7 @@ export class BrowserContext
       new Map<string, channels.BrowserContextUpdateSubscriptionParams["event"]>([
         [Events.BrowserContext.Console, "console"],
         [Events.BrowserContext.Dialog, "dialog"],
+        [Events.BrowserContext.DialogClosed, "dialogClosed"],
         [Events.BrowserContext.Request, "request"],
         [Events.BrowserContext.Response, "response"],
         [Events.BrowserContext.RequestFinished, "requestFinished"],
@@ -210,7 +210,7 @@ export class BrowserContext
   async _initializeHarFromOptions(recordHar: BrowserContextOptions["recordHar"]) {
     if (!recordHar) return;
     const defaultContent = recordHar.path.endsWith(".zip") ? "attach" : "embed";
-    await this._recordIntoHAR(recordHar.path, null, {
+    await this.tracing._recordIntoHAR(recordHar.path, null, {
       url: recordHar.urlFilter,
       updateContent: recordHar.content ?? (recordHar.omitContent ? "omit" : defaultContent),
       updateMode: recordHar.mode ?? "full",
@@ -262,7 +262,7 @@ export class BrowserContext
     const routeHandlers = this._routes.slice();
     for (const routeHandler of routeHandlers) {
       // If the page or the context was closed we stall all requests right away.
-      if (page?._closeWasCalled || this.isClosedOrClosing()) return;
+      if (page?._closeWasCalled || this.isClosed()) return;
       if (!routeHandler.matches(route.request().url())) continue;
       const index = this._routes.indexOf(routeHandler);
       if (index === -1) continue;
@@ -311,93 +311,95 @@ export class BrowserContext
     return this._browser;
   }
 
-  contextOptions() {
-    return contextParamsToPublicOptions(this._options);
-  }
-
   pages(): Page[] {
     return [...this._pages];
   }
 
-  isClosedOrClosing(): boolean {
+  isClosed(): boolean {
     return this._closingStatus !== "none";
   }
 
   async newPage(): Promise<Page> {
     if (this._ownerPage) throw new Error("Please use browser.newContext()");
-    return Page.from((await this._channel.newPage()).page);
+    return Page.from((await this._channel.newPage({}, kNoTimeout)).page);
   }
 
   async cookies(urls?: string | string[]): Promise<network.NetworkCookie[]> {
     if (!urls) urls = [];
     if (urls && typeof urls === "string") urls = [urls];
-    return (await this._channel.cookies({ urls: urls as string[] })).cookies;
+    return (await this._channel.cookies({ urls: urls as string[] }, kNoTimeout)).cookies;
   }
 
   async addCookies(cookies: network.SetNetworkCookieParam[]): Promise<void> {
-    await this._channel.addCookies({ cookies });
+    await this._channel.addCookies({ cookies }, kNoTimeout);
   }
 
   async clearCookies(options: network.ClearNetworkCookieOptions = {}): Promise<void> {
-    await this._channel.clearCookies({
-      name: isString(options.name) ? options.name : undefined,
-      nameRegexSource: isRegExp(options.name) ? options.name.source : undefined,
-      nameRegexFlags: isRegExp(options.name) ? options.name.flags : undefined,
-      domain: isString(options.domain) ? options.domain : undefined,
-      domainRegexSource: isRegExp(options.domain) ? options.domain.source : undefined,
-      domainRegexFlags: isRegExp(options.domain) ? options.domain.flags : undefined,
-      path: isString(options.path) ? options.path : undefined,
-      pathRegexSource: isRegExp(options.path) ? options.path.source : undefined,
-      pathRegexFlags: isRegExp(options.path) ? options.path.flags : undefined,
-    });
+    await this._channel.clearCookies(network.toClearCookiesParams(options), kNoTimeout);
   }
 
   async grantPermissions(permissions: string[], options?: { origin?: string }): Promise<void> {
-    await this._channel.grantPermissions({ permissions, ...options });
+    await this._channel.grantPermissions({ permissions, ...options }, kNoTimeout);
   }
 
   async clearPermissions(): Promise<void> {
-    await this._channel.clearPermissions();
+    await this._channel.clearPermissions({}, kNoTimeout);
   }
 
   async setGeolocation(
     geolocation: { longitude: number; latitude: number; accuracy?: number } | null
   ): Promise<void> {
-    await this._channel.setGeolocation({ geolocation: geolocation || undefined });
+    await this._channel.setGeolocation({ geolocation: geolocation || undefined }, kNoTimeout);
   }
 
   async setExtraHTTPHeaders(headers: Headers): Promise<void> {
     network.validateHeaders(headers);
-    await this._channel.setExtraHTTPHeaders({ headers: headersObjectToArray(headers) });
+    await this._channel.setExtraHTTPHeaders({ headers: headersObjectToArray(headers) }, kNoTimeout);
   }
 
   async setOffline(offline: boolean): Promise<void> {
-    await this._channel.setOffline({ offline });
+    await this._channel.setOffline({ offline }, kNoTimeout);
   }
 
   async setHTTPCredentials(
-    httpCredentials: { username: string; password: string } | null
+    httpCredentials: HttpCredentials | HttpCredentials[] | null
   ): Promise<void> {
-    await this._channel.setHTTPCredentials({ httpCredentials: httpCredentials || undefined });
+    await this._channel.setHTTPCredentials(
+      { httpCredentials: toHttpCredentialsProtocol(httpCredentials || undefined) },
+      kNoTimeout
+    );
   }
 
-  async addInitScript(script: Function | string | { path?: string; content?: string }, arg?: any) {
-    const source = await evaluationScript(this._platform, script, arg);
-    return DisposableObject.from((await this._channel.addInitScript({ source })).disposable);
+  async addInitScript(
+    script: Function | string | { path?: string; content?: string },
+    arg?: any,
+    options?: ExposeFunctionsOptions
+  ) {
+    assertEvaluateOptions(options);
+    if (options?.exposeFunctions) return await addInitScriptWithExposedFunctions(this, script, arg);
+    const source = await evaluationScript(script, arg);
+    return DisposableObject.from(
+      (await this._channel.addInitScript({ source }, kNoTimeout)).disposable
+    );
   }
 
   async exposeBinding(
     name: string,
-    callback: (source: structs.BindingSource, ...args: any[]) => any,
-    options: { handle?: boolean } = {}
+    callback: (source: structs.BindingSource, ...args: any[]) => any
   ): Promise<DisposableObject> {
-    const result = await this._channel.exposeBinding({ name, needsHandle: options.handle });
+    const result = await this._channel.exposeBinding({ name }, kNoTimeout);
     this._bindings.set(name, callback);
     return DisposableObject.from(result.disposable);
   }
 
+  async _exposeCallbackBinding(name: string, callback: Function): Promise<DisposableObject> {
+    this._bindings.set(name, (source, ...args) => callback(...args));
+    const result = await this._channel.exposeBinding({ name, noGlobal: true }, kNoTimeout);
+    return DisposableObject.from(result.disposable);
+  }
+
   async exposeFunction(name: string, callback: Function): Promise<DisposableObject> {
-    const result = await this._channel.exposeBinding({ name });
+    const result = await this._channel.exposeBinding({ name }, kNoTimeout);
     const binding = (source: structs.BindingSource, ...args: any[]) => callback(...args);
     this._bindings.set(name, binding);
     return DisposableObject.from(result.disposable);
@@ -409,7 +411,7 @@ export class BrowserContext
     options: { times?: number } = {}
   ): Promise<DisposableStub> {
     this._routes.unshift(
-      new network.RouteHandler(this._platform, this._options.baseURL, url, handler, options.times)
+      new network.RouteHandler(this._options.baseURL, url, handler, options.times)
     );
     await this._updateInterceptionPatterns({ title: "Route requests" });
     return new DisposableStub(() => this.unroute(url, handler));
@@ -425,29 +427,6 @@ export class BrowserContext
     await this._updateWebSocketInterceptionPatterns({ title: "Route WebSockets" });
   }
 
-  async _recordIntoHAR(
-    har: string,
-    page: Page | null,
-    options: {
-      url?: string | RegExp;
-      updateContent?: "attach" | "embed" | "omit";
-      updateMode?: "minimal" | "full";
-    } = {}
-  ): Promise<void> {
-    const { harId } = await this._channel.harStart({
-      page: page?._channel,
-      options: {
-        zip: har.endsWith(".zip"),
-        content: options.updateContent ?? "attach",
-        urlGlob: isString(options.url) ? options.url : undefined,
-        urlRegexSource: isRegExp(options.url) ? options.url.source : undefined,
-        urlRegexFlags: isRegExp(options.url) ? options.url.flags : undefined,
-        mode: options.updateMode ?? "minimal",
-      },
-    });
-    this._harRecorders.set(harId, { path: har, content: options.updateContent ?? "attach" });
-  }
-
   async routeFromHAR(
     har: string,
     options: {
@@ -461,7 +440,7 @@ export class BrowserContext
     const localUtils = this._connection.localUtils();
     if (!localUtils) throw new Error("Route from har is not supported in thin clients");
     if (options.update) {
-      await this._recordIntoHAR(har, null, options);
+      await this.tracing._recordIntoHAR(har, null, options);
       return;
     }
     const harRouter = await HarRouter.create(localUtils, har, options.notFound || "abort", {
@@ -508,7 +487,7 @@ export class BrowserContext
   private async _updateInterceptionPatterns(options: { internal: true } | { title: string }) {
     const patterns = network.RouteHandler.prepareInterceptionPatterns(this._routes);
     await this._wrapApiCall(
-      () => this._channel.setNetworkInterceptionPatterns({ patterns }),
+      () => this._channel.setNetworkInterceptionPatterns({ patterns }, kNoTimeout),
       options
     );
   }
@@ -520,7 +499,7 @@ export class BrowserContext
       this._webSocketRoutes
     );
     await this._wrapApiCall(
-      () => this._channel.setWebSocketInterceptionPatterns({ patterns }),
+      () => this._channel.setWebSocketInterceptionPatterns({ patterns }, kNoTimeout),
       options
     );
   }
@@ -531,7 +510,7 @@ export class BrowserContext
 
   async waitForEvent(event: string, optionsOrPredicate: WaitForEventOptions = {}): Promise<any> {
     return await this._wrapApiCall(async () => {
-      const timeout = this._timeoutSettings.timeout(
+      const timeoutOptions = this._timeoutSettings.timeout(
         typeof optionsOrPredicate === "function" ? {} : optionsOrPredicate
       );
       const predicate =
@@ -540,8 +519,8 @@ export class BrowserContext
           : optionsOrPredicate.predicate;
       const waiter = Waiter.createForEvent(this, event);
       waiter.rejectOnTimeout(
-        timeout,
-        `Timeout ${timeout}ms exceeded while waiting for event "${event}"`
+        timeoutOptions,
+        `Timeout ${timeoutOptions.timeout}ms exceeded while waiting for event "${event}"`
       );
       if (event !== Events.BrowserContext.Close)
         waiter.rejectOnEvent(
@@ -555,8 +534,13 @@ export class BrowserContext
     });
   }
 
-  async storageState(options: { path?: string; indexedDB?: boolean } = {}): Promise<StorageState> {
-    const state = await this._channel.storageState({ indexedDB: options.indexedDB });
+  async storageState(
+    options: { path?: string; indexedDB?: boolean; opfs?: boolean; credentials?: boolean } = {}
+  ): Promise<StorageState> {
+    const state = await this._channel.storageState(
+      { indexedDB: options.indexedDB, opfs: options.opfs, credentials: options.credentials },
+      kNoTimeout
+    );
     if (options.path) {
       await writeTempFile(options.path, JSON.stringify(state, undefined, 2));
     }
@@ -564,8 +548,8 @@ export class BrowserContext
   }
 
   async setStorageState(storageState: string | SetStorageState): Promise<void> {
-    const state = await prepareStorageState(this._platform, storageState);
-    await this._channel.setStorageState({ storageState: state });
+    const state = await prepareStorageState(storageState);
+    await this._channel.setStorageState({ storageState: state }, kNoTimeout);
   }
 
   backgroundPages(): Page[] {
@@ -581,7 +565,8 @@ export class BrowserContext
     if (!(page instanceof Page) && !(page instanceof Frame))
       throw new Error("page: expected Page or Frame");
     const result = await this._channel.newCDPSession(
-      page instanceof Page ? { page: page._channel } : { frame: page._channel }
+      page instanceof Page ? { page: page._channel } : { frame: page._channel },
+      kNoTimeout
     );
     return CDPSession.from(result.session);
   }
@@ -593,6 +578,7 @@ export class BrowserContext
     this._browser?._browserType._playwright.selectors._contextsForSelectors.delete(this);
     this._disposeHarRouters();
     this.tracing._resetStackCounter();
+    this.request.tracing._resetStackCounter();
     this.emit(Events.BrowserContext.Close, this);
   }
 
@@ -601,59 +587,43 @@ export class BrowserContext
   }
 
   async close(options: { reason?: string } = {}): Promise<void> {
-    if (this.isClosedOrClosing()) return;
+    if (this.isClosed()) return;
     this._closeReason = options.reason;
     this._closingStatus = "closing";
     await this.request.dispose(options);
     await this._instrumentation.runBeforeCloseBrowserContext(this);
-    await this._wrapApiCall(
-      async () => {
-        for (const [harId, harParams] of this._harRecorders) {
-          const har = await this._channel.harExport({ harId });
-          const artifact = Artifact.from(har.artifact);
-          // Server side will compress artifact if content is attach or if file is .zip.
-          const isCompressed = harParams.content === "attach" || harParams.path.endsWith(".zip");
-          const needCompressed = harParams.path.endsWith(".zip");
-          if (isCompressed && !needCompressed) {
-            const localUtils = this._connection.localUtils();
-            if (!localUtils) throw new Error("Uncompressed har is not supported in thin clients");
-            await artifact.saveAs(harParams.path + ".tmp");
-            await localUtils.harUnzip({
-              zipFile: harParams.path + ".tmp",
-              harFile: harParams.path,
-            });
-          } else {
-            await artifact.saveAs(harParams.path);
-          }
-          await artifact.delete();
-        }
-      },
-      { internal: true }
-    );
-    await this._channel.close(options);
+    const harError = await this.tracing._exportAllHars().catch((e) => e);
+    await this._channel.close(options, kNoTimeout);
     await this._closedPromise;
+    if (harError) throw harError;
   }
 
-  async _enableRecorder(
-    params: channels.BrowserContextEnableRecorderParams,
-    eventSink?: RecorderEventSink
+  async _showRecorder(params: channels.BrowserContextShowRecorderParams) {
+    await this._channel.showRecorder(params, kNoTimeout);
+  }
+
+  async _startRecording(
+    params: channels.BrowserContextStartRecordingParams,
+    eventSink: RecorderEventSink
   ) {
-    if (eventSink) this._onRecorderEventSink = eventSink;
-    await this._channel.enableRecorder(params);
+    this._onRecorderEventSink = eventSink;
+    await this._channel.startRecording(params, kNoTimeout);
   }
 
-  async _disableRecorder() {
-    this._onRecorderEventSink = undefined;
-    await this._channel.disableRecorder();
+  async _stopRecording() {
+    try {
+      await this._channel.stopRecording({}, kNoTimeout);
+    } finally {
+      this._onRecorderEventSink = undefined;
+    }
   }
 
   async _exposeConsoleApi() {
-    await this._channel.exposeConsoleApi();
+    await this._channel.exposeConsoleApi({}, kNoTimeout);
   }
 }
 
 async function prepareStorageState(
-  platform: Platform,
   storageState: string | SetStorageState
 ): Promise<NonNullable<channels.BrowserNewContextParams["storageState"]>> {
   if (typeof storageState !== "string") return storageState as any;
@@ -666,11 +636,8 @@ async function prepareStorageState(
 }
 
 export async function prepareBrowserContextParams(
-  platform: Platform,
   options: BrowserContextOptions
 ): Promise<channels.BrowserNewContextParams> {
-  if (options.videoSize && !options.videosPath)
-    throw new Error(`"videoSize" option requires "videosPath" to be specified`);
   if (options.extraHTTPHeaders) network.validateHeaders(options.extraHTTPHeaders);
   const contextParams: channels.BrowserNewContextParams = {
     ...options,
@@ -680,7 +647,7 @@ export async function prepareBrowserContextParams(
       ? headersObjectToArray(options.extraHTTPHeaders)
       : undefined,
     storageState: options.storageState
-      ? await prepareStorageState(platform, options.storageState)
+      ? await prepareStorageState(options.storageState)
       : undefined,
     serviceWorkers: options.serviceWorkers,
     colorScheme: options.colorScheme === null ? "no-override" : options.colorScheme,
@@ -688,44 +655,20 @@ export async function prepareBrowserContextParams(
     forcedColors: options.forcedColors === null ? "no-override" : options.forcedColors,
     contrast: options.contrast === null ? "no-override" : options.contrast,
     acceptDownloads: toAcceptDownloadsProtocol(options.acceptDownloads),
-    clientCertificates: await toClientCertificatesProtocol(platform, options.clientCertificates),
+    clientCertificates: await toClientCertificatesProtocol(options.clientCertificates),
+    httpCredentials: toHttpCredentialsProtocol(options.httpCredentials),
   };
-  if (!contextParams.recordVideo && options.videosPath) {
-    contextParams.recordVideo = {
-      dir: options.videosPath,
-      size: options.videoSize,
-    };
-  }
   if (contextParams.recordVideo && contextParams.recordVideo.dir)
-    contextParams.recordVideo.dir = platform.path().resolve(contextParams.recordVideo.dir);
+    contextParams.recordVideo.dir = path.resolve(contextParams.recordVideo.dir);
   return contextParams;
 }
 
-function contextParamsToPublicOptions(
-  params: channels.BrowserNewContextParams
-): api.BrowserContextOptions {
-  const result = {
-    ...params,
-    viewport: params.noDefaultViewport ? null : params.viewport,
-    extraHTTPHeaders: params.extraHTTPHeaders
-      ? headersArrayToObject(params.extraHTTPHeaders, false)
-      : undefined,
-    colorScheme: params.colorScheme === "no-override" ? null : params.colorScheme,
-    reducedMotion: params.reducedMotion === "no-override" ? null : params.reducedMotion,
-    forcedColors: params.forcedColors === "no-override" ? null : params.forcedColors,
-    contrast: params.contrast === "no-override" ? null : params.contrast,
-    acceptDownloads:
-      params.acceptDownloads === "accept"
-        ? true
-        : params.acceptDownloads === "deny"
-          ? false
-          : undefined,
-    storageState: undefined,
-  };
-  delete result.clientCertificates;
-  delete result.noDefaultViewport;
-  delete result.selectorEngines;
-  return result;
+export function toHttpCredentialsProtocol(
+  credentials?: HttpCredentials | HttpCredentials[]
+): HttpCredentials[] | undefined {
+  if (!credentials) return undefined;
+  const list = Array.isArray(credentials) ? credentials : [credentials];
+  return list.length ? list : undefined;
 }
 
 function toAcceptDownloadsProtocol(acceptDownloads?: boolean) {
@@ -735,14 +678,16 @@ function toAcceptDownloadsProtocol(acceptDownloads?: boolean) {
 }
 
 export async function toClientCertificatesProtocol(
-  platform: Platform,
   certs?: BrowserContextOptions["clientCertificates"]
 ): Promise<channels.PlaywrightNewRequestParams["clientCertificates"]> {
   if (!certs) return undefined;
 
-  const bufferizeContent = async (value?: Buffer, path?: string): Promise<Buffer | undefined> => {
+  const bufferizeContent = async (
+    value?: Buffer,
+    filePath?: string
+  ): Promise<Buffer | undefined> => {
     if (value) return value;
-    if (path) return await readTempFile(path, { encoding: "base64" });
+    if (filePath) return await readTempFile(filePath, { encoding: "base64" });
   };
 
   return await Promise.all(

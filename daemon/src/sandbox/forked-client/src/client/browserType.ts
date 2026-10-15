@@ -15,13 +15,14 @@
  * limitations under the License.
  */
 
+import { assert } from "../utils/isomorphic/assert";
+import { headersObjectToArray } from "../utils/isomorphic/headers";
 import { Browser } from "./browser";
 import { BrowserContext, prepareBrowserContextParams } from "./browserContext";
 import { ChannelOwner } from "./channelOwner";
 import { envObjectToArray } from "./clientHelper";
-import { assert } from "../utils/isomorphic/assert";
-import { headersObjectToArray } from "../utils/isomorphic/headers";
 import { TimeoutSettings } from "./timeoutSettings";
+import { Worker } from "./worker";
 
 import type { Playwright } from "./playwright";
 import type {
@@ -85,10 +86,12 @@ export class BrowserType
       ignoreAllDefaultArgs:
         !!options.ignoreDefaultArgs && !Array.isArray(options.ignoreDefaultArgs),
       env: options.env ? envObjectToArray(options.env) : undefined,
-      timeout: new TimeoutSettings(this._platform).launchTimeout(options),
     };
     return await this._wrapApiCall(async () => {
-      const browser = Browser.from((await this._channel.launch(launchOptions)).browser);
+      const browser = Browser.from(
+        (await this._channel.launch(launchOptions, new TimeoutSettings().launchTimeout(options)))
+          .browser
+      );
       browser._connectToBrowserType(this, options, logger);
       return browser;
     });
@@ -120,7 +123,7 @@ export class BrowserType
     if (typeof optionsOrEndpoint === "string")
       return await this._connect({ ...options, endpoint: optionsOrEndpoint });
     assert(optionsOrEndpoint.wsEndpoint, "options.wsEndpoint is required");
-    return await this._connect({ ...options, endpoint: optionsOrEndpoint.wsEndpoint });
+    return await this._connect({ ...optionsOrEndpoint, endpoint: optionsOrEndpoint.wsEndpoint });
   }
 
   async _connect(params: ConnectOptions): Promise<Browser> {
@@ -136,46 +139,58 @@ export class BrowserType
     options?: api.ConnectOverCDPOptions
   ): Promise<api.Browser>;
   async connectOverCDP(
-    endpointURLOrOptions: (api.ConnectOverCDPOptions & { wsEndpoint?: string }) | string,
+    transport: api.ConnectOverCDPTransport,
     options?: api.ConnectOverCDPOptions
-  ) {
-    if (typeof endpointURLOrOptions === "string")
-      return await this._connectOverCDP(endpointURLOrOptions, options);
-    const endpointURL =
-      "endpointURL" in endpointURLOrOptions
-        ? endpointURLOrOptions.endpointURL
-        : endpointURLOrOptions.wsEndpoint;
-    assert(endpointURL, "Cannot connect over CDP without wsEndpoint.");
-    return await this.connectOverCDP(endpointURL, endpointURLOrOptions);
-  }
-
-  async _connectOverCDP(
-    endpointURL: string,
-    params: api.ConnectOverCDPOptions = {}
+  ): Promise<api.Browser>;
+  async connectOverCDP(
+    overloaded:
+      (api.ConnectOverCDPOptions & { wsEndpoint?: string }) | string | api.ConnectOverCDPTransport,
+    options?: api.ConnectOverCDPOptions
   ): Promise<Browser> {
-    if (this.name() !== "chromium")
-      throw new Error("Connecting over CDP is only supported in Chromium.");
-    const headers = params.headers ? headersObjectToArray(params.headers) : undefined;
-    const result = await this._channel.connectOverCDP({
-      endpointURL,
-      headers,
-      slowMo: params.slowMo,
-      timeout: new TimeoutSettings(this._platform).timeout(params),
-      isLocal: params.isLocal,
-    });
-    const browser = Browser.from(result.browser);
-    browser._connectToBrowserType(this, {}, params.logger);
-    if (result.defaultContext)
-      await this._instrumentation.runAfterCreateBrowserContext(
-        BrowserContext.from(result.defaultContext)
-      );
-    return browser;
+    let endpointURL: string | undefined;
+    let transport: api.ConnectOverCDPTransport | undefined;
+    let params: api.ConnectOverCDPOptions;
+    if (typeof overloaded === "string") {
+      endpointURL = overloaded;
+      params = options ?? {};
+    } else if (isConnectionTransport(overloaded)) {
+      if (this.name() !== "chromium" && this.name() !== "webkit")
+        throw new Error("Connecting over CDP is only supported in Chromium and WebKit.");
+      if (this._connection.isRemote())
+        throw new Error(
+          "Passing a ConnectionTransport to connectOverCDP is not supported when connecting remotely."
+        );
+      transport = overloaded;
+      params = options ?? {};
+    } else {
+      endpointURL =
+        "endpointURL" in overloaded ? (overloaded as any).endpointURL : overloaded.wsEndpoint;
+      assert(endpointURL, "Cannot connect over CDP without wsEndpoint.");
+      params = overloaded;
+    }
+    if (endpointURL && this.name() !== "chromium" && this.name() !== "webkit")
+      throw new Error("Connecting over CDP is only supported in Chromium and WebKit.");
+
+    const result = await this._channel.connectOverCDP(
+      {
+        endpointURL,
+        transport: transport as any,
+        headers: params.headers ? headersObjectToArray(params.headers) : undefined,
+        slowMo: params.slowMo,
+        isLocal: params.isLocal,
+        noDefaults: params.noDefaults,
+        isWebView: (params as any).isWebView,
+        artifactsDir: params.artifactsDir,
+      },
+      new TimeoutSettings().timeout(params)
+    );
+    return await this._browserFromConnectResult(result);
   }
 
-  async _connectOverCDPTransport(transport: /* ConnectionTransport */ any) {
-    if (this.name() !== "chromium")
-      throw new Error("Connecting over CDP is only supported in Chromium.");
-    const result = await this._channel.connectOverCDPTransport({ transport });
+  private async _browserFromConnectResult(result: {
+    browser: channels.BrowserChannel;
+    defaultContext?: channels.BrowserContextChannel;
+  }): Promise<Browser> {
     const browser = Browser.from(result.browser);
     browser._connectToBrowserType(this, {}, undefined);
     if (result.defaultContext)
@@ -184,4 +199,25 @@ export class BrowserType
       );
     return browser;
   }
+
+  async _connectToWorker(endpoint: string, options: { timeout?: number } = {}): Promise<Worker> {
+    if (this.name() !== "chromium")
+      throw new Error("Connecting to workers is only supported in Chromium.");
+    const result = await this._channel.connectToWorker(
+      {
+        endpoint,
+      },
+      new TimeoutSettings().timeout(options)
+    );
+    return Worker.from(result.worker);
+  }
+}
+
+function isConnectionTransport(value: any): value is api.ConnectOverCDPTransport {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    typeof value.send === "function" &&
+    typeof value.close === "function"
+  );
 }

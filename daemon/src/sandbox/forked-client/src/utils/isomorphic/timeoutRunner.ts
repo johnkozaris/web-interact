@@ -28,13 +28,17 @@ export async function raceAgainstDeadline<T>(
   deadline: number
 ): Promise<{ result: T; timedOut: false } | { timedOut: true }> {
   let timer: NodeJS.Timeout | undefined;
-  return Promise.race([
+  // Note: not including "await" here truncates the async stack inside cb(), so always include it.
+  return await Promise.race([
     cb().then((result) => {
       return { result, timedOut: false };
     }),
     new Promise<{ timedOut: true }>((resolve) => {
       if (!deadline) return;
-      timer = setTimeout(() => resolve({ timedOut: true }), deadline - monotonicTime());
+      timer = setTimeout(
+        () => resolve({ timedOut: true }),
+        Math.max(0, deadline - monotonicTime())
+      );
     }),
   ]).finally(() => {
     clearTimeout(timer);
@@ -44,7 +48,7 @@ export async function raceAgainstDeadline<T>(
 export async function pollAgainstDeadline<T>(
   callback: () => Promise<{ continuePolling: boolean; result: T }>,
   deadline: number,
-  pollIntervals: number[] = [100, 250, 500, 1000]
+  [...pollIntervals]: number[] = [100, 250, 500, 1000]
 ): Promise<{ result?: T; timedOut: boolean }> {
   const lastPollInterval = pollIntervals.pop() ?? 1000;
   let lastResult: T | undefined;

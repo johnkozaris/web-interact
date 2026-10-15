@@ -554,7 +554,7 @@ export class QuickJSSandbox {
             }
 
             const playwrightClient = createPlaywrightClient();
-            const connection = new playwrightClient.Connection(playwrightClient.quickjsPlatform);
+            const connection = new playwrightClient.Connection();
             connection.onmessage = (message) => {
               transportSend(JSON.stringify(message));
             };

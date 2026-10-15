@@ -61,36 +61,33 @@ function resolvePlaywrightInternal(modulePath: string): string {
   throw new Error(`Could not locate Playwright internals at ${modulePath}`);
 }
 
-const serverInternals = require(
-  resolvePlaywrightInternal(path.join("lib", "server", "index.js"))
-) as {
-  createPlaywright: (options: { sdkLanguage: string }) => unknown;
-  DispatcherConnection: new (isLocal?: boolean) => DispatcherConnectionLike;
-  RootDispatcher: new (
-    connection: DispatcherConnectionLike,
-    createPlaywright?: (scope: unknown, params: RootInitializeParams) => Promise<unknown>
-  ) => RootDispatcherLike;
-  PlaywrightDispatcher: new (
-    scope: unknown,
-    playwright: unknown,
-    options?: HostBridgeDispatcherOptions
-  ) => PlaywrightDispatcherLike;
-};
-
-const clientInternals = require(
-  resolvePlaywrightInternal(path.join("lib", "client", "connection.js"))
-) as {
-  Connection: new (platform: unknown) => ClientConnectionLike;
-};
-
-const nodePlatformInternals = require(
-  resolvePlaywrightInternal(path.join("lib", "server", "utils", "nodePlatform.js"))
-) as {
-  nodePlatform: unknown;
+// Since 1.64, Playwright ships its internals as a single lib/coreBundle.js.
+const coreBundle = require(resolvePlaywrightInternal(path.join("lib", "coreBundle.js"))) as {
+  server: {
+    createPlaywright: (options: { sdkLanguage: string }) => unknown;
+    DispatcherConnection: new (isLocal?: boolean) => DispatcherConnectionLike;
+    RootDispatcher: new (
+      connection: DispatcherConnectionLike,
+      createPlaywright?: (scope: unknown, params: RootInitializeParams) => Promise<unknown>
+    ) => RootDispatcherLike;
+    PlaywrightDispatcher: new (
+      scope: unknown,
+      playwright: unknown,
+      options?: HostBridgeDispatcherOptions
+    ) => PlaywrightDispatcherLike;
+  };
+  inprocess: {
+    playwright: { _connection: object };
+  };
 };
 
 export const { createPlaywright, DispatcherConnection, RootDispatcher, PlaywrightDispatcher } =
-  serverInternals;
+  coreBundle.server;
 
-export const { Connection } = clientInternals;
-export const { nodePlatform } = nodePlatformInternals;
+// Playwright's client Connection is no longer exported by name. The in-process
+// client's connection is an instance of it, so its constructor is the class.
+export function createClientConnection(): ClientConnectionLike {
+  const ClientConnection = coreBundle.inprocess.playwright._connection
+    .constructor as new () => ClientConnectionLike;
+  return new ClientConnection();
+}

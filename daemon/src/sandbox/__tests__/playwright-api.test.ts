@@ -315,7 +315,7 @@ async function createNavigationServer(): Promise<NavigationServer> {
   };
 }
 
-describe.sequential("QuickJS Playwright Page API coverage", () => {
+describe("QuickJS Playwright Page API coverage", () => {
   let browserRootDir = "";
   let manager: BrowserManager;
 
@@ -334,7 +334,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   }, 180_000);
 
-  describe.sequential("navigation", () => {
+  describe("navigation", () => {
     const browserName = "playwright-navigation";
     let harness: JsonSandboxHarness;
     let navigationServer: NavigationServer;
@@ -417,7 +417,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     }, 15_000);
   });
 
-  describe.sequential("content and evaluation", () => {
+  describe("content and evaluation", () => {
     const browserName = "playwright-content-evaluation";
     let harness: JsonSandboxHarness;
 
@@ -507,7 +507,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("form interaction and waiting", () => {
+  describe("form interaction and waiting", () => {
     const browserName = "playwright-form-waiting";
     let harness: JsonSandboxHarness;
 
@@ -614,7 +614,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("locators and multiple elements", () => {
+  describe("locators and multiple elements", () => {
     const browserName = "playwright-locators";
     let harness: JsonSandboxHarness;
 
@@ -711,7 +711,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("AI snapshots", () => {
+  describe("AI snapshots", () => {
     const browserName = "playwright-snapshots";
     let harness: JsonSandboxHarness;
 
@@ -739,7 +739,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("screenshots and input devices", () => {
+  describe("screenshots and input devices", () => {
     const browserName = "playwright-media-input";
     let harness: JsonSandboxHarness;
 
@@ -803,7 +803,7 @@ describe.sequential("QuickJS Playwright Page API coverage", () => {
     });
   });
 
-  describe.sequential("events", () => {
+  describe("events", () => {
     const browserName = "playwright-events";
     let harness: JsonSandboxHarness;
     let navigationServer: NavigationServer;

@@ -15,8 +15,6 @@
  * limitations under the License.
  */
 
-import { captureRawStack } from "./stackTrace";
-
 export class ManualPromise<T = void> extends Promise<T> {
   private _resolve!: (t: T) => void;
   private _reject!: (e: Error) => void;
@@ -95,7 +93,7 @@ export class LongStandingScope {
 
   private async _race(promises: Promise<any>[], safe: boolean, defaultValue?: any): Promise<any> {
     const terminatePromise = new ManualPromise<Error>();
-    const frames = captureRawStack();
+    const frames = (new Error().stack || "").split("\n");
     if (this._terminateError) terminatePromise.resolve(this._terminateError);
     if (this._closeError) terminatePromise.resolve(cloneError(this._closeError, frames));
     this._terminatePromises.set(terminatePromise, frames);
@@ -108,6 +106,20 @@ export class LongStandingScope {
       this._terminatePromises.delete(terminatePromise);
     }
   }
+}
+
+export function signalToPromise(signal: AbortSignal): {
+  promise: Promise<void>;
+  dispose: () => void;
+} {
+  if (signal.aborted) return { promise: Promise.resolve(), dispose: () => {} };
+  let dispose: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    const onAbort = () => resolve();
+    signal.addEventListener("abort", onAbort, { once: true });
+    dispose = () => signal.removeEventListener("abort", onAbort);
+  });
+  return { promise, dispose: dispose! };
 }
 
 function cloneError(error: Error, frames: string[]) {

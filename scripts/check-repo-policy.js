@@ -11,7 +11,7 @@ const daemonPackagePath = path.join(repoDir, "daemon", "package.json");
 const cargoTomlPath = path.join(repoDir, "cli", "Cargo.toml");
 const cliDaemonPath = path.join(repoDir, "cli", "src", "daemon.rs");
 const embeddedDaemonPath = path.join(repoDir, "daemon", "src", "daemon.ts");
-const expectedPnpmPackageManager = "pnpm@10.33.0";
+const expectedPnpmPackageManager = "pnpm@12.11.2";
 const runtimeDependencyNames = ["patchright", "patchright-core", "quickjs-emscripten"];
 const runtimeDependencyVersionConstants = {
   patchright: "PATCHRIGHT_VERSION",
@@ -113,7 +113,7 @@ async function main() {
     errors.push("package.json engines.node must be >=22");
   }
 
-  if (rootPackage.engines?.pnpm !== ">=10") {
+  if (rootPackage.engines?.pnpm !== ">=12") {
     errors.push("package.json engines.pnpm must document the required pnpm major version");
   }
 

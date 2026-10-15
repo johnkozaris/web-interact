@@ -1,5 +1,3 @@
-import "./patchright-workarounds.js";
-
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
@@ -7,6 +5,7 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "patchright";
 
 import { getBrowsersDir, readMode } from "./local-endpoint.js";
+import { applyPatchrightRuntimeEnableWorkaround } from "./patchright-workarounds.js";
 
 /**
  * Detect the best browser channel available on this system.
@@ -516,6 +515,8 @@ export class BrowserManager {
       throw new Error(`Playwright did not expose a browser handle for "${name}"`);
     }
 
+    await applyPatchrightRuntimeEnableWorkaround(browser, [context]);
+
     const entry: BrowserEntry = {
       name,
       type: "launched",
@@ -537,6 +538,7 @@ export class BrowserManager {
       isLocal: true,
     });
     const contexts = browser.contexts();
+    await applyPatchrightRuntimeEnableWorkaround(browser, contexts);
 
     // Enumerate existing tabs for connected browsers, but leave them unnamed so getPage(name)
     // still opens a fresh tab unless a targetId is provided.

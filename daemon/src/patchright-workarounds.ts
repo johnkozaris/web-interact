@@ -1,10 +1,4 @@
-import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const require = createRequire(import.meta.url);
-const currentDir = path.dirname(fileURLToPath(import.meta.url));
+import type { Browser, BrowserContext } from "patchright";
 
 const RUNTIME_PATCH_APPLIED = Symbol.for("web-interact.patchright.runtime-enable.applied");
 const RUNTIME_SESSION_ENABLED = Symbol.for("web-interact.patchright.runtime-enable.session");
@@ -15,53 +9,76 @@ type CRSessionLike = {
   [RUNTIME_SESSION_ENABLED]?: boolean;
 };
 
-function applyPatchrightRuntimeEnableWorkaround(): void {
-  const chromiumInternals = require(resolvePatchrightInternal(path.join("lib", "server", "chromium", "crConnection.js"))) as {
-    CRSession?: {
-      prototype: CRSessionLike;
-    };
-  };
+type ServerBrowserLike = {
+  _connection?: { rootSession?: CRSessionLike };
+};
 
-  const sessionPrototype = chromiumInternals.CRSession?.prototype;
-  if (!sessionPrototype || sessionPrototype[RUNTIME_PATCH_APPLIED]) {
+type ServerPageLike = {
+  delegate?: { _mainFrameSession?: { _client?: CRSessionLike } };
+};
+
+function toServerImpl<T>(clientObject: unknown): T | undefined {
+  const toImpl = (clientObject as { _connection?: { toImpl?: (value: unknown) => unknown } })
+    ._connection?.toImpl;
+  return typeof toImpl === "function" ? (toImpl(clientObject) as T) : undefined;
+}
+
+async function enableRuntimeOnce(session: CRSessionLike): Promise<void> {
+  if (session[RUNTIME_SESSION_ENABLED]) {
     return;
   }
 
-  const originalSend = sessionPrototype.send;
-  sessionPrototype.send = async function patchedSend(method: string, params?: unknown): Promise<unknown> {
-    const result = await originalSend.call(this, method, params);
-
-    // Patchright's Chromium page sessions listen for Runtime.consoleAPICalled but do not
-    // enable the Runtime domain. Enabling it after Page.enable restores console events
-    // and page.consoleMessages() without forking the dependency.
-    if (method === "Page.enable" && !this[RUNTIME_SESSION_ENABLED]) {
-      this[RUNTIME_SESSION_ENABLED] = true;
-      try {
-        await originalSend.call(this, "Runtime.enable");
-      } catch {
-        // Ignore detached or already-closed sessions; Page.enable already succeeded.
-      }
-    }
-
-    return result;
-  };
-
-  sessionPrototype[RUNTIME_PATCH_APPLIED] = true;
+  session[RUNTIME_SESSION_ENABLED] = true;
+  try {
+    await session.send("Runtime.enable");
+  } catch {
+    // Ignore detached or already-closed sessions.
+  }
 }
 
-function resolvePatchrightInternal(modulePath: string): string {
-  const candidates = [
-    path.resolve(currentDir, "../node_modules/patchright-core", modulePath),
-    path.resolve(process.cwd(), "node_modules/patchright-core", modulePath),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
+/**
+ * Patchright's Chromium page sessions listen for Runtime.consoleAPICalled but do not
+ * enable the Runtime domain. Enabling it after Page.enable restores console events
+ * and page.consoleMessages() without forking the dependency.
+ *
+ * Playwright bundles its internals since 1.64, so the CDP session class is reached
+ * through a launched browser instead of a module path. Call this right after a
+ * browser is launched or connected: it patches the class once, and enables Runtime on
+ * the page sessions that were opened before the patch existed.
+ */
+export async function applyPatchrightRuntimeEnableWorkaround(
+  browser: Browser,
+  contexts: BrowserContext[] = browser.contexts()
+): Promise<void> {
+  const rootSession = toServerImpl<ServerBrowserLike>(browser)?._connection?.rootSession;
+  if (!rootSession) {
+    // Not an in-process Chromium browser.
+    return;
   }
 
-  throw new Error(`Could not locate Patchright internals at ${modulePath}`);
-}
+  const sessionPrototype = Object.getPrototypeOf(rootSession) as CRSessionLike;
+  if (!sessionPrototype[RUNTIME_PATCH_APPLIED]) {
+    const originalSend = sessionPrototype.send;
+    sessionPrototype.send = async function patchedSend(
+      this: CRSessionLike,
+      method: string,
+      params?: unknown
+    ): Promise<unknown> {
+      const result = await originalSend.call(this, method, params);
+      if (method === "Page.enable") {
+        await enableRuntimeOnce(this);
+      }
+      return result;
+    };
+    sessionPrototype[RUNTIME_PATCH_APPLIED] = true;
+  }
 
-applyPatchrightRuntimeEnableWorkaround();
+  for (const context of contexts) {
+    for (const page of context.pages()) {
+      const session = toServerImpl<ServerPageLike>(page)?.delegate?._mainFrameSession?._client;
+      if (session) {
+        await enableRuntimeOnce(session);
+      }
+    }
+  }
+}

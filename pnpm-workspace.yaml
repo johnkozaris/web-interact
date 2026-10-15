@@ -1,2 +1,6 @@
 packages:
   - daemon
+allowBuilds:
+  esbuild: true
+  patchright: true
+  patchright-core: true

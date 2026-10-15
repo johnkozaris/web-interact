@@ -27,7 +27,7 @@ export const scheme: { [key: string]: Validator } = {};
 export function findValidator(
   type: string,
   method: string,
-  kind: "Initializer" | "Event" | "Params" | "Result"
+  kind: "Initializer" | "Event" | "Params" | "Result" | "ErrorDetails"
 ): Validator {
   const validator = maybeFindValidator(type, method, kind);
   if (!validator) throw new ValidationError(`Unknown scheme for ${kind}: ${type}.${method}`);
@@ -36,7 +36,7 @@ export function findValidator(
 export function maybeFindValidator(
   type: string,
   method: string,
-  kind: "Initializer" | "Event" | "Params" | "Result"
+  kind: "Initializer" | "Event" | "Params" | "Result" | "ErrorDetails"
 ): Validator | undefined {
   const schemeName =
     type + (kind === "Initializer" ? "" : method[0].toUpperCase() + method.substring(1)) + kind;
@@ -44,6 +44,9 @@ export function maybeFindValidator(
 }
 export function createMetadataValidator(): Validator {
   return tOptional(scheme["Metadata"]);
+}
+export function createWaitInfoValidator(): Validator {
+  return scheme["WaitInfo"];
 }
 
 export const tFloat: Validator = (arg: any, path: string, context: ValidatorContext) => {

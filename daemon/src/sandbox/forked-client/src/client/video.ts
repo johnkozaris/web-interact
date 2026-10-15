@@ -1,29 +1,47 @@
 // @ts-nocheck
+/**
+ * Copyright (c) Microsoft Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { Artifact } from "./artifact";
 import { EventEmitter } from "./eventEmitter";
 
-export class Video extends EventEmitter {
-  constructor(page, connection, artifact) {
-    super(page._platform);
-    this._page = page;
-    this._connection = connection;
+import type { Connection } from "./connection";
+import type * as api from "../../types/types";
+
+export class Video extends EventEmitter implements api.Video {
+  private _artifact: Artifact | undefined;
+  private _isRemote = false;
+
+  constructor(connection: Connection, artifact: Artifact | undefined) {
+    super();
+    this._isRemote = connection.isRemote();
     this._artifact = artifact;
   }
 
-  async start() {
-    throw new Error("Video capture is not available in the QuickJS sandbox");
+  async path(): Promise<string> {
+    // The recording lives on the host filesystem; sandboxed scripts use saveAs().
+    throw new Error("video.path() is not available in the QuickJS sandbox. Use saveAs() instead.");
   }
 
-  async stop() {}
-
-  async path() {
-    throw new Error("Video capture is not available in the QuickJS sandbox");
+  async saveAs(path: string): Promise<void> {
+    if (!this._artifact) throw new Error("Video recording has not been started.");
+    return await this._artifact.saveAs(path);
   }
 
-  async saveAs() {
-    throw new Error("Video capture is not available in the QuickJS sandbox");
-  }
-
-  async delete() {
-    await this._artifact?.delete?.();
+  async delete(): Promise<void> {
+    if (this._artifact) await this._artifact.delete();
   }
 }
