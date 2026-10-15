@@ -19,6 +19,7 @@
 - `discover` showed every checkbox and radio button as `[checked]`. It now shows `[checked]` only when checked and `[checked=mixed]` when indeterminate. Toggle buttons show `[pressed]`, which was never shown before.
 - `network route`, `network block`, and `network unroute` had no effect, because the route ended with the command that set it. Routes now stay on the page until removed.
 - `page.route()` handlers that called `route.fulfill()` hung until the script timed out.
+- Acting by index (`click 3`, `fill 2 ...`) failed with `Node with given id does not belong to the document` after the page reloaded, was opened again at the same URL, or posted a form back to it, until `discover` ran again. Indices now refresh when the page loads a new document, as they already did when the URL changed. If the index then names a different element, the action stops and asks you to run `discover` again.
 
 ### Infrastructure
 - pnpm 12, TypeScript 7, and vitest 5 for development; CI tests the daemon on Node 22 and 24 and checks that the committed `daemon/dist` bundles are current.
