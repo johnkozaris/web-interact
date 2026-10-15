@@ -21822,10 +21822,37 @@ async function cdpClick(session, backendNodeId, options) {
     };
   }
 }
+async function hasFocus(session, backendNodeId) {
+  let objectId;
+  try {
+    const { object: object2 } = await session.send("DOM.resolveNode", {
+      backendNodeId
+    });
+    objectId = object2?.objectId;
+    if (!objectId) return false;
+    const { result } = await session.send("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function() {
+        if (!this.isConnected) return false;
+        var active = this.getRootNode().activeElement;
+        return !!active && this.contains(active);
+      }`,
+      returnByValue: true
+    });
+    return result?.value === true;
+  } catch {
+    return false;
+  } finally {
+    if (objectId) {
+      await session.send("Runtime.releaseObject", { objectId }).catch(() => {
+      });
+    }
+  }
+}
 async function cdpFocus(session, backendNodeId) {
   try {
     await session.send("DOM.focus", { backendNodeId });
-    return;
+    return await hasFocus(session, backendNodeId);
   } catch {
   }
   try {
@@ -21842,7 +21869,9 @@ async function cdpFocus(session, backendNodeId) {
     }
   } catch {
   }
+  return hasFocus(session, backendNodeId);
 }
+var NOT_FOCUSED_ERROR = "Element could not be focused, so nothing was typed. It may have been removed, hidden or disabled since discover. Run discover again.";
 function randomKeystrokeDelay(baseDelay) {
   if (baseDelay <= 0) return 0;
   const jitter = baseDelay * 0.3;
@@ -21853,7 +21882,9 @@ async function cdpType(session, backendNodeId, text, options) {
   const delay = options?.delay ?? 5;
   try {
     await scrollIntoView(session, backendNodeId);
-    await cdpFocus(session, backendNodeId);
+    if (!await cdpFocus(session, backendNodeId)) {
+      return { success: false, method: "failed", error: NOT_FOCUSED_ERROR };
+    }
     if (clearFirst) {
       const resolved = await session.send("DOM.resolveNode", { backendNodeId });
       await session.send("Runtime.callFunctionOn", {
@@ -21928,7 +21959,9 @@ async function cdpType(session, backendNodeId, text, options) {
     return { success: true, method: "cdp-keys" };
   } catch (e) {
     try {
-      await cdpFocus(session, backendNodeId);
+      if (!await cdpFocus(session, backendNodeId)) {
+        return { success: false, method: "failed", error: NOT_FOCUSED_ERROR };
+      }
       await session.send("Input.insertText", { text });
       return { success: true, method: "cdp-insert" };
     } catch {

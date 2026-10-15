@@ -206,14 +206,52 @@ export async function cdpClick(
 // CDP Focus
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether keys sent now would reach the element: it is still in the page, and the
+ * focused element, as its own document or shadow root sees it, is the element or
+ * inside it (such as the inner input of a component that delegates focus).
+ */
+async function hasFocus(
+  session: CDPSession,
+  backendNodeId: number
+): Promise<boolean> {
+  let objectId: string | undefined;
+  try {
+    const { object } = (await session.send("DOM.resolveNode", {
+      backendNodeId,
+    })) as { object?: { objectId?: string } };
+    objectId = object?.objectId;
+    if (!objectId) return false;
+
+    const { result } = (await session.send("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function() {
+        if (!this.isConnected) return false;
+        var active = this.getRootNode().activeElement;
+        return !!active && this.contains(active);
+      }`,
+      returnByValue: true,
+    })) as { result?: { value?: unknown } };
+    return result?.value === true;
+  } catch {
+    // A node from a document the page has left no longer resolves
+    return false;
+  } finally {
+    if (objectId) {
+      await session.send("Runtime.releaseObject", { objectId }).catch(() => {});
+    }
+  }
+}
+
+/** Focus the element, and report whether it has focus afterwards. */
 async function cdpFocus(
   session: CDPSession,
   backendNodeId: number
-): Promise<void> {
+): Promise<boolean> {
   // Method 1: DOM.focus
   try {
     await session.send("DOM.focus", { backendNodeId });
-    return;
+    return await hasFocus(session, backendNodeId);
   } catch { /* try fallback */ }
 
   // Method 2: JS focus via CDP
@@ -229,6 +267,7 @@ async function cdpFocus(
       await session.send("Runtime.releaseObject", { objectId: object.objectId }).catch(() => {});
     }
   } catch { /* ignore */ }
+  return hasFocus(session, backendNodeId);
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +280,10 @@ export interface CDPTypeResult {
   method: "cdp-keys" | "cdp-insert" | "failed";
   error?: string;
 }
+
+// Keys go to whatever has focus, so without it they would land in another field.
+const NOT_FOCUSED_ERROR =
+  "Element could not be focused, so nothing was typed. It may have been removed, hidden or disabled since discover. Run discover again.";
 
 /**
  * Type text into an element using CDP keyboard events.
@@ -271,7 +314,9 @@ export async function cdpType(
 
   try {
     await scrollIntoView(session, backendNodeId);
-    await cdpFocus(session, backendNodeId);
+    if (!(await cdpFocus(session, backendNodeId))) {
+      return { success: false, method: "failed", error: NOT_FOCUSED_ERROR };
+    }
 
     // Clear existing text if requested — uses native value setter to work with React/Vue controlled inputs
     if (clearFirst) {
@@ -355,7 +400,9 @@ export async function cdpType(
   } catch (e) {
     // Fallback: try insertText (simpler but less compatible)
     try {
-      await cdpFocus(session, backendNodeId);
+      if (!(await cdpFocus(session, backendNodeId))) {
+        return { success: false, method: "failed", error: NOT_FOCUSED_ERROR };
+      }
       await session.send("Input.insertText", { text });
       return { success: true, method: "cdp-insert" };
     } catch {

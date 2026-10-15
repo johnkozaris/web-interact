@@ -20,6 +20,7 @@
 - `network route`, `network block`, and `network unroute` had no effect, because the route ended with the command that set it. Routes now stay on the page until removed.
 - `page.route()` handlers that called `route.fulfill()` hung until the script timed out.
 - Acting by index (`click 3`, `fill 2 ...`) failed with `Node with given id does not belong to the document` after the page reloaded, was opened again at the same URL, or posted a form back to it, until `discover` ran again. Indices now refresh when the page loads a new document, as they already did when the URL changed. If the index then names a different element, the action stops and asks you to run `discover` again.
+- `type` and `fill` by index reported success when the element could not take focus, and the text went to whichever element had focus instead. That happened when the page had replaced the field since `discover`, or the field was disabled, hidden or passed focus elsewhere. They now type nothing and fail with `Element could not be focused, so nothing was typed`.
 
 ### Infrastructure
 - pnpm 12, TypeScript 7, and vitest 5 for development; CI tests the daemon on Node 22 and 24 and checks that the committed `daemon/dist` bundles are current.
