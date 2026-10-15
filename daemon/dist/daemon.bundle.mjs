@@ -177,7 +177,6 @@ var BrowserManager = class {
   // Discover state persists across script executions so CLI commands can
   // reference element indices from a previous `discover` call.
   discoverResults = /* @__PURE__ */ new Map();
-  discoverUrls = /* @__PURE__ */ new Map();
   previousSelectors = /* @__PURE__ */ new Map();
   constructor(baseDir = getBrowsersDir(), dependencies = {}) {
     this.baseDir = baseDir;
@@ -330,7 +329,6 @@ var BrowserManager = class {
     }
     entry.pages.delete(pageName);
     this.discoverResults.get(browserName)?.delete(pageName);
-    this.discoverUrls.get(browserName)?.delete(pageName);
     this.previousSelectors.get(browserName)?.delete(pageName);
     if (!page.isClosed()) {
       await page.close();
@@ -356,7 +354,6 @@ var BrowserManager = class {
     this.browsers.delete(name);
     entry.pages.clear();
     this.discoverResults.delete(name);
-    this.discoverUrls.delete(name);
     this.previousSelectors.delete(name);
     try {
       if (entry.type === "launched") {
@@ -374,25 +371,16 @@ var BrowserManager = class {
   browserCount() {
     return this.browsers.size;
   }
-  setDiscoverResult(browserName, pageName, elements, pageUrl) {
+  setDiscoverResult(browserName, pageName, result) {
     let pageMap = this.discoverResults.get(browserName);
     if (!pageMap) {
       pageMap = /* @__PURE__ */ new Map();
       this.discoverResults.set(browserName, pageMap);
     }
-    pageMap.set(pageName, elements);
-    let urlMap = this.discoverUrls.get(browserName);
-    if (!urlMap) {
-      urlMap = /* @__PURE__ */ new Map();
-      this.discoverUrls.set(browserName, urlMap);
-    }
-    urlMap.set(pageName, pageUrl);
+    pageMap.set(pageName, result);
   }
   getDiscoverResult(browserName, pageName) {
     return this.discoverResults.get(browserName)?.get(pageName);
-  }
-  getDiscoverUrl(browserName, pageName) {
-    return this.discoverUrls.get(browserName)?.get(pageName);
   }
   setPreviousSelectors(browserName, pageName, selectors) {
     let pageMap = this.previousSelectors.get(browserName);
@@ -489,7 +477,6 @@ var BrowserManager = class {
       }
       entry.pages.clear();
       this.discoverResults.delete(entry.name);
-      this.discoverUrls.delete(entry.name);
       this.previousSelectors.delete(entry.name);
       if (entry.type === "launched") {
         this.browsers.delete(entry.name);
@@ -21346,6 +21333,17 @@ async function withCDPSession(page, fn) {
     });
   }
 }
+async function readDocumentId(session) {
+  try {
+    const { frameTree } = await session.send("Page.getFrameTree");
+    return frameTree.frame.loaderId;
+  } catch {
+    return void 0;
+  }
+}
+async function getDocumentId(page) {
+  return withCDPSession(page, readDocumentId);
+}
 var SKIP_TAGS = /* @__PURE__ */ new Set([
   "html",
   "body",
@@ -21573,6 +21571,7 @@ async function getPageElementsCDP(page, options, previousSelectors) {
   return await withCDPSession(page, async (session) => {
     await session.send("DOM.enable").catch(() => {
     });
+    const documentId = await readDocumentId(session);
     const popup = await setupDialogHandler(session).catch(() => null);
     await setupShadowAccess(session).catch(() => {
     });
@@ -21699,7 +21698,8 @@ async function getPageElementsCDP(page, options, previousSelectors) {
         scrollableAreas: scrollAreas,
         viewport
       },
-      currentSelectors
+      currentSelectors,
+      documentId
     };
   });
 }
@@ -24182,7 +24182,8 @@ return __PlaywrightClient;`);
     );
     const opts = typeof options === "string" ? JSON.parse(options) : options ?? {};
     const browserName = this.#options.browserName;
-    const { result, currentSelectors } = await getPageElementsCDP(
+    const url2 = page.url();
+    const { result, currentSelectors, documentId } = await getPageElementsCDP(
       page,
       {
         maxElements: opts.maxElements,
@@ -24192,18 +24193,17 @@ return __PlaywrightClient;`);
       this.#options.manager.getPreviousSelectors(browserName, pageName)
     );
     this.#options.manager.setPreviousSelectors(browserName, pageName, currentSelectors);
-    this.#options.manager.setDiscoverResult(
-      browserName,
-      pageName,
-      result.elements.map((e) => ({
+    this.#options.manager.setDiscoverResult(browserName, pageName, {
+      elements: result.elements.map((e) => ({
         backendNodeId: e.backendNodeId,
         selector: e.selector,
         role: e.role,
         name: e.name,
         tag: e.tag
       })),
-      page.url()
-    );
+      url: url2,
+      documentId
+    });
     return JSON.stringify(result);
   }
   async #clickElement(name, selector, action) {
@@ -24294,20 +24294,29 @@ return __PlaywrightClient;`);
     const pageName = requireString(name, "Page name or targetId");
     const idx = typeof index === "number" ? index : parseInt(String(index), 10);
     const browserName = this.#options.browserName;
-    let elements = this.#options.manager.getDiscoverResult(browserName, pageName);
-    const discoverUrl = this.#options.manager.getDiscoverUrl(browserName, pageName);
-    if (elements) {
+    let discovered = this.#options.manager.getDiscoverResult(browserName, pageName);
+    if (discovered) {
       try {
         const page2 = await this.#options.manager.getPage(browserName, pageName);
-        const currentUrl = page2.url();
-        if (discoverUrl && currentUrl !== discoverUrl) {
+        if (page2.url() !== discovered.url) {
           await this.#getPageElements(name, "{}");
-          elements = this.#options.manager.getDiscoverResult(browserName, pageName);
+          discovered = this.#options.manager.getDiscoverResult(browserName, pageName);
+        } else if (await getDocumentId(page2) !== discovered.documentId) {
+          const previous = discovered.elements[idx - 1];
+          await this.#getPageElements(name, "{}");
+          discovered = this.#options.manager.getDiscoverResult(browserName, pageName);
+          const current = discovered?.elements[idx - 1];
+          if (previous && current && current.selector !== previous.selector) {
+            return JSON.stringify({
+              success: false,
+              error: `Element [${idx}] was ${previous.role || previous.tag} "${previous.name?.substring(0, 40) || ""}" before the page reloaded and is now ${current.role || current.tag} "${current.name?.substring(0, 40) || ""}". Run discover again.`
+            });
+          }
         }
       } catch {
       }
     }
-    if (!elements) {
+    if (!discovered) {
       let currentUrl = "";
       try {
         const p = await this.#options.manager.getPage(browserName, pageName);
@@ -24319,6 +24328,7 @@ return __PlaywrightClient;`);
         error: `No discover result for page "${pageName}". Run discover first.${currentUrl ? ` Current URL: ${currentUrl}` : ""}`
       });
     }
+    const { elements } = discovered;
     const el = elements[idx - 1];
     if (!el) {
       return JSON.stringify({

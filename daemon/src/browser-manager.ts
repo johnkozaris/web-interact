@@ -57,6 +57,14 @@ export interface DiscoverElement {
   tag: string;
 }
 
+export interface DiscoverResult {
+  elements: DiscoverElement[];
+  /** Page URL when discover ran. */
+  url: string;
+  /** Main frame loaderId when discover ran: a new document gets a new one, even at the same URL. */
+  documentId: string | undefined;
+}
+
 export interface BrowserEntry {
   name: string;
   type: "launched" | "connected";
@@ -147,8 +155,7 @@ export class BrowserManager {
 
   // Discover state persists across script executions so CLI commands can
   // reference element indices from a previous `discover` call.
-  private readonly discoverResults = new Map<string, Map<string, DiscoverElement[]>>();
-  private readonly discoverUrls = new Map<string, Map<string, string>>();
+  private readonly discoverResults = new Map<string, Map<string, DiscoverResult>>();
   private readonly previousSelectors = new Map<string, Map<string, Set<string>>>();
 
 
@@ -361,7 +368,6 @@ export class BrowserManager {
     entry.pages.delete(pageName);
     // Clean up per-page discover state
     this.discoverResults.get(browserName)?.delete(pageName);
-    this.discoverUrls.get(browserName)?.delete(pageName);
     this.previousSelectors.get(browserName)?.delete(pageName);
 
     if (!page.isClosed()) {
@@ -402,7 +408,6 @@ export class BrowserManager {
     this.browsers.delete(name);
     entry.pages.clear();
     this.discoverResults.delete(name);
-    this.discoverUrls.delete(name);
     this.previousSelectors.delete(name);
 
     try {
@@ -425,28 +430,17 @@ export class BrowserManager {
     return this.browsers.size;
   }
 
-  setDiscoverResult(browserName: string, pageName: string, elements: DiscoverElement[], pageUrl: string): void {
+  setDiscoverResult(browserName: string, pageName: string, result: DiscoverResult): void {
     let pageMap = this.discoverResults.get(browserName);
     if (!pageMap) {
       pageMap = new Map();
       this.discoverResults.set(browserName, pageMap);
     }
-    pageMap.set(pageName, elements);
-
-    let urlMap = this.discoverUrls.get(browserName);
-    if (!urlMap) {
-      urlMap = new Map();
-      this.discoverUrls.set(browserName, urlMap);
-    }
-    urlMap.set(pageName, pageUrl);
+    pageMap.set(pageName, result);
   }
 
-  getDiscoverResult(browserName: string, pageName: string): DiscoverElement[] | undefined {
+  getDiscoverResult(browserName: string, pageName: string): DiscoverResult | undefined {
     return this.discoverResults.get(browserName)?.get(pageName);
-  }
-
-  getDiscoverUrl(browserName: string, pageName: string): string | undefined {
-    return this.discoverUrls.get(browserName)?.get(pageName);
   }
 
   setPreviousSelectors(browserName: string, pageName: string, selectors: Set<string>): void {
@@ -573,7 +567,6 @@ export class BrowserManager {
 
       entry.pages.clear();
       this.discoverResults.delete(entry.name);
-      this.discoverUrls.delete(entry.name);
       this.previousSelectors.delete(entry.name);
 
       if (entry.type === "launched") {
