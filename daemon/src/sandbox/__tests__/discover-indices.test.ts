@@ -41,6 +41,20 @@ const INPUTS_PAGE_HTML = `<!doctype html>
   </body>
 </html>`;
 
+// Corner sits at the viewport's top-left, where a click aimed at an element with no box
+// used to land.
+const CORNER_PAGE_HTML = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Index Corner</title>
+  </head>
+  <body>
+    <button id="corner" type="button" style="position: fixed; left: 0; top: 0" onclick="document.body.dataset.clicked = this.id">Corner</button>
+    <button id="target" type="button" style="margin: 120px 0 0 200px" onclick="document.body.dataset.clicked = this.id">Target</button>
+  </body>
+</html>`;
+
 // After discover, the test disables, hides and redirects these; Plain keeps focus throughout.
 const UNFOCUSABLE_PAGE_HTML = `<!doctype html>
 <html>
@@ -100,6 +114,8 @@ async function startIndexTestSite(): Promise<IndexTestSite> {
       html = indexPageHtml({ banner: shiftingLoads > 1 });
     } else if (pathname === "/inputs") {
       html = INPUTS_PAGE_HTML;
+    } else if (pathname === "/corner") {
+      html = CORNER_PAGE_HTML;
     } else if (pathname === "/unfocusable") {
       html = UNFOCUSABLE_PAGE_HTML;
     } else if (pathname === "/widgets") {
@@ -260,6 +276,38 @@ describe("acting by discover index", () => {
         'Element [1] was button "Mark" before the page reloaded and is now button "Dismiss". Run discover again.',
     });
     expect(await clicked("shifting")).toBe("nothing");
+  }, 120_000);
+
+  it("refuses to click an element that was replaced or hidden since discover", async () => {
+    const refused = { success: false, error: expect.stringContaining("nothing was clicked") };
+
+    // Like a re-render: Target is swapped for a copy in the same document, so the URL and
+    // document are unchanged and the discovered node is detached.
+    await open("corner", `${site.origin}/corner`);
+    const target = (await discoverNames("corner")).indexOf("Target") + 1;
+    expect(target).toBeGreaterThan(0);
+    await run(`
+      await (await browser.getPage("corner")).evaluate(() => {
+        const old = document.getElementById("target");
+        old.replaceWith(old.cloneNode(true));
+      });
+    `);
+    expect(await click("corner", target)).toMatchObject(refused);
+    expect(await clicked("corner")).toBe("nothing");
+
+    const fresh = (await discoverNames("corner")).indexOf("Target") + 1;
+    expect(await click("corner", fresh)).toMatchObject({ success: true });
+    expect(await clicked("corner")).toBe("target");
+
+    await open("corner", `${site.origin}/corner`);
+    const hidden = (await discoverNames("corner")).indexOf("Target") + 1;
+    await run(`
+      await (await browser.getPage("corner")).evaluate(() => {
+        document.getElementById("target").style.display = "none";
+      });
+    `);
+    expect(await click("corner", hidden)).toMatchObject(refused);
+    expect(await clicked("corner")).toBe("nothing");
   }, 120_000);
 
   it("types by index into the discovered field after a same-URL reload", async () => {
