@@ -337,7 +337,7 @@ pub enum ActionCommand {
         what: SetCommand,
     },
 
-    #[command(about = "Read browser console messages (JS errors, warnings, logs)")]
+    #[command(about = "Read console messages and uncaught errors since the page last navigated")]
     Console {
         #[arg(long, default_value = "default", help = "Named page to use")]
         page: String,
@@ -345,6 +345,8 @@ pub enum ActionCommand {
         level: Option<String>,
         #[arg(long, help = "Filter by text substring")]
         filter: Option<String>,
+        #[arg(long, help = "Clear the messages after printing them")]
+        clear: bool,
     },
 
     // --- Network subcommands ---
@@ -770,16 +772,16 @@ pub enum NetworkCommand {
         #[arg(long, default_value = "default")]
         page: String,
     },
-    #[command(about = "Intercept requests matching a pattern")]
+    #[command(about = "Intercept requests matching a pattern until unrouted")]
     Route {
         #[arg(help = "URL pattern to intercept")]
         pattern: String,
-        #[arg(long, help = "Abort matched requests")]
+        #[arg(long, conflicts_with_all = ["body", "status"], help = "Abort matched requests")]
         abort: bool,
         #[arg(long, help = "Respond with this JSON body")]
         body: Option<String>,
-        #[arg(long, default_value = "200", help = "HTTP status code for response")]
-        status: u16,
+        #[arg(long, help = "HTTP status code for the response [default: 200]")]
+        status: Option<u16>,
         #[arg(long, default_value = "default")]
         page: String,
     },
@@ -1436,33 +1438,36 @@ await page.context().grantPermissions(["geolocation"]);"#,
         }),
 
         // --- Console ---
-        ActionCommand::Console { page, level, filter } => {
+        ActionCommand::Console { page, level, filter, clear } => {
             let mut filter_code = String::new();
             if let Some(lvl) = level {
+                // Playwright reports console.warn() as "warning".
+                let lvl = if lvl == "warning" { "warn" } else { lvl.as_str() };
                 filter_code += &format!("msgs = msgs.filter(m => m.type === {});\n", js_str(lvl));
             }
             if let Some(f) = filter {
                 filter_code += &format!("msgs = msgs.filter(m => m.text.includes({}));\n", js_str(f));
             }
+            let clear_code = if *clear {
+                "await page.clearConsoleMessages();\nawait page.clearPageErrors();\n"
+            } else {
+                ""
+            };
             Some(format!(
                 r#"const page = await browser.getPage({p});
-// Collect console messages via Playwright's protocol-level hook (catches everything)
-const collected = [];
-const handler = (msg) => collected.push({{ type: msg.type(), text: msg.text(), url: msg.location().url || "" }});
-page.on("console", handler);
-// Also listen for page errors (uncaught exceptions)
-const errHandler = (err) => collected.push({{ type: "error", text: err.message, url: "" }});
-page.on("pageerror", errHandler);
-// Wait briefly to catch any queued messages
-await page.waitForTimeout(100);
-// Also get any messages from recent page activity by triggering a small eval
-await page.evaluate(() => {{}});
-await page.waitForTimeout(200);
-page.off("console", handler);
-page.off("pageerror", errHandler);
-let msgs = collected;
+// The browser keeps each page's console messages and uncaught errors since it last
+// navigated, so this also shows what earlier commands logged.
+const consoleMessages = (await page.consoleMessages()).map((m) => ({{
+  type: m.type() === "warning" ? "warn" : m.type(),
+  text: m.text(),
+}}));
+const pageErrors = (await page.pageErrors()).map((e) => ({{
+  type: "error",
+  text: "Uncaught " + (e.name || "Error") + ": " + e.message,
+}}));
+{clear_code}let msgs = [...consoleMessages, ...pageErrors];
 {filter_code}if (msgs.length === 0) {{
-  console.log("(no console messages captured — run console early to start listening)");
+  console.log("(no console messages)");
 }} else {{
   for (const m of msgs) {{
     console.log(m.type.toUpperCase().padEnd(5) + " " + m.text);
@@ -1499,43 +1504,40 @@ console.log(JSON.stringify(filtered.slice(-50), null, 2));"#,
                     },
                 )
             }
+            // browser.route() keeps the route on the page across commands. page.route()
+            // would end with this command's script.
             NetworkCommand::Block { pattern, page } => format!(
-                "const page = await browser.getPage({p});\nawait page.route({pat}, (route) => route.abort());",
+                "await browser.route({p}, {pat}, {{ abort: true }});",
                 p = js_str(page),
                 pat = js_str(pattern),
             ),
             NetworkCommand::Route { pattern, abort, body, status, page } => {
-                if *abort {
-                    format!(
-                        "const page = await browser.getPage({p});\nawait page.route({pat}, (route) => route.abort());",
-                        p = js_str(page), pat = js_str(pattern),
-                    )
-                } else if let Some(b) = body {
-                    format!(
-                        r#"const page = await browser.getPage({p});
-await page.route({pat}, (route) => route.fulfill({{ status: {status}, contentType: "application/json", body: {body} }}));"#,
-                        p = js_str(page), pat = js_str(pattern), body = js_str(b),
-                    )
+                let response = if *abort {
+                    "{ abort: true }".to_string()
+                } else if body.is_some() || status.is_some() {
+                    let mut fields = vec![format!("status: {}", status.unwrap_or(200))];
+                    if let Some(b) = body {
+                        fields.push("contentType: \"application/json\"".to_string());
+                        fields.push(format!("body: {}", js_str(b)));
+                    }
+                    format!("{{ {} }}", fields.join(", "))
                 } else {
-                    format!(
-                        "const page = await browser.getPage({p});\nawait page.route({pat}, (route) => route.continue());",
-                        p = js_str(page), pat = js_str(pattern),
-                    )
-                }
+                    "null".to_string()
+                };
+                format!(
+                    "await browser.route({p}, {pat}, {response});",
+                    p = js_str(page),
+                    pat = js_str(pattern),
+                )
             }
-            NetworkCommand::Unroute { pattern, page } => {
-                if let Some(pat) = pattern {
-                    format!(
-                        "const page = await browser.getPage({p});\nawait page.unroute({pat});",
-                        p = js_str(page), pat = js_str(pat),
-                    )
-                } else {
-                    format!(
-                        "const page = await browser.getPage({p});\nawait page.unrouteAll();",
-                        p = js_str(page),
-                    )
-                }
-            }
+            NetworkCommand::Unroute { pattern, page } => match pattern {
+                Some(pat) => format!(
+                    "await browser.unroute({p}, {pat});",
+                    p = js_str(page),
+                    pat = js_str(pat),
+                ),
+                None => format!("await browser.unroute({p});", p = js_str(page)),
+            },
         }),
     }
 }

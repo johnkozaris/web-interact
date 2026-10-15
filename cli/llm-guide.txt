@@ -34,6 +34,11 @@ LLM USAGE GUIDE:
       web-interact --headless network route "*/api/users" --body '[{"id":1,"name":"Test"}]'
       web-interact --headless open "https://app.example.com/users"
       web-interact --headless get text ".user-list"
+      web-interact --headless network unroute "*/api/users"   # routes stay until removed
+
+    Example: check for JavaScript errors after an action
+      web-interact --headless click 7
+      web-interact --headless console --level error   # everything logged since the page last navigated
 
     Example: visual debugging with --vision
       web-interact --headless --vision open "https://myapp.com/settings"
@@ -68,7 +73,7 @@ LLM USAGE GUIDE:
       cookies (get|set|clear), storage (local|local-set|session|session-set),
       clipboard (read|write), mouse (move|click|down|up|wheel),
       keyboard (type|insert|press|down|up), set (viewport|geo|offline|media|headers),
-      network (requests|block|route|unroute)
+      network (requests|block|route|unroute), console
 
     FLAGS: --headless, --browser NAME, --connect [URL], --own-browser, --humanize,
       --vision, --vision --annotate, --timeout SECONDS, --page NAME, --ignore-https-errors
@@ -285,7 +290,10 @@ LLM USAGE GUIDE:
     browser.check(name, index, checked?)         Toggle checkbox/radio on element [N]
     browser.clickAt(name, x, y, opts?)           CDP click at viewport coordinates (for canvas/WebGL apps)
     browser.drag(name, x1, y1, x2, y2, opts?)   CDP drag between coordinates (for drawing/sliders)
-    browser.getInteractiveElements(name, opts)   Low-level: detect without settling (prefer discover)
+    browser.route(name, pattern, response?)      Mock matching requests until unrouted, across scripts
+                                                 response: { status?, contentType?, body? } or { abort: true }
+    browser.unroute(name, pattern?)              Remove browser.route() mocks (all when pattern is omitted)
+    browser.getPageElements(name, opts)          Low-level: detect without settling (prefer discover)
     browser.waitForSettled(name, opts)            Low-level: wait for network+DOM quiet
     browser.clickElement(name, selector)          Low-level: JS click by CSS selector
     browser.fillElement(name, selector, value)    Low-level: JS fill by CSS selector

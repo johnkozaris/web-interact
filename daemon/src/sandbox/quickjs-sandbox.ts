@@ -220,6 +220,41 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
+interface RouteResponse {
+  abort?: boolean;
+  status?: number;
+  contentType?: string;
+  body?: string;
+}
+
+function parseRouteResponse(value: unknown): RouteResponse {
+  if (value === null || value === undefined) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Route response must be an object");
+  }
+
+  const { abort, status, contentType, body } = value as Record<string, unknown>;
+  if (abort !== undefined && typeof abort !== "boolean") {
+    throw new TypeError("Route response abort must be a boolean");
+  }
+  if (
+    status !== undefined &&
+    (typeof status !== "number" || !Number.isInteger(status) || status < 100 || status > 599)
+  ) {
+    throw new TypeError("Route response status must be an HTTP status code from 100 to 599");
+  }
+  if (contentType !== undefined && typeof contentType !== "string") {
+    throw new TypeError("Route response contentType must be a string");
+  }
+  if (body !== undefined && typeof body !== "string") {
+    throw new TypeError("Route response body must be a string");
+  }
+
+  return { abort, status, contentType, body };
+}
+
 function toServerImpl<T>(clientObject: unknown, label: string): T {
   const connection = (clientObject as { _connection?: { toImpl?: (value: unknown) => unknown } })
     ._connection;
@@ -345,6 +380,8 @@ export class QuickJSSandbox {
             this.#actionByIndex(name, index, "select", value),
           checkByIndex: (name, index, checked) =>
             this.#actionByIndex(name, index, "check", checked),
+          route: (name, pattern, response) => this.#route(name, pattern, response),
+          unroute: (name, pattern) => this.#unroute(name, pattern),
           saveScreenshot: (name, data) => this.#writeTempFile(name, data),
           writeFile: (name, data) => this.#writeTempFile(name, data),
           readFile: (name, options) => this.#readTempFile(name, options),
@@ -900,6 +937,20 @@ export class QuickJSSandbox {
                   },
                   enumerable: true,
                 },
+                // Unlike page.route(), these routes outlive the script: the host keeps
+                // them on the named page until browser.unroute() or the page closes.
+                route: {
+                  value: async (pageName, pattern, response) => {
+                    await hostCall("route", JSON.stringify([pageName, pattern, response ?? null]));
+                  },
+                  enumerable: true,
+                },
+                unroute: {
+                  value: async (pageName, pattern) => {
+                    await hostCall("unroute", JSON.stringify([pageName, pattern ?? null]));
+                  },
+                  enumerable: true,
+                },
               });
               Object.freeze(browserApi);
 
@@ -1443,6 +1494,52 @@ export class QuickJSSandbox {
     }
 
     return JSON.stringify({ success: false, error: `Unknown action: ${action}` });
+  }
+
+  // Routes a script registers with page.route() end with the script, because their
+  // handlers live in the sandbox. browser.route() registers on the host page instead,
+  // so a mock set by one CLI call still applies to the next ones.
+
+  async #route(name: unknown, pattern: unknown, response: unknown): Promise<void> {
+    const page = (await this.#options.manager.getPage(
+      this.#options.browserName,
+      requireString(name, "Page name or targetId")
+    )) as Page;
+    const url = requireString(pattern, "URL pattern");
+    const mock = parseRouteResponse(response);
+
+    // Replace an earlier route for the same pattern instead of stacking another one.
+    await page.unroute(url);
+    await page.route(url, async (route) => {
+      try {
+        if (mock.abort) {
+          await route.abort();
+        } else if (mock.status !== undefined || mock.body !== undefined) {
+          await route.fulfill({
+            status: mock.status ?? 200,
+            contentType: mock.contentType,
+            body: mock.body ?? "",
+          });
+        } else {
+          await route.fallback();
+        }
+      } catch {
+        // The handler runs in the daemon, where an unhandled rejection is fatal.
+        // Failures here mean the page or request went away.
+      }
+    });
+  }
+
+  async #unroute(name: unknown, pattern: unknown): Promise<void> {
+    const page = (await this.#options.manager.getPage(
+      this.#options.browserName,
+      requireString(name, "Page name or targetId")
+    )) as Page;
+    if (pattern === null || pattern === undefined) {
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+      return;
+    }
+    await page.unroute(requireString(pattern, "URL pattern"));
   }
 
   async #clickAt(
