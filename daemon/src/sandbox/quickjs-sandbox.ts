@@ -220,6 +220,41 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
+interface RouteResponse {
+  abort?: boolean;
+  status?: number;
+  contentType?: string;
+  body?: string;
+}
+
+function parseRouteResponse(value: unknown): RouteResponse {
+  if (value === null || value === undefined) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Route response must be an object");
+  }
+
+  const { abort, status, contentType, body } = value as Record<string, unknown>;
+  if (abort !== undefined && typeof abort !== "boolean") {
+    throw new TypeError("Route response abort must be a boolean");
+  }
+  if (
+    status !== undefined &&
+    (typeof status !== "number" || !Number.isInteger(status) || status < 100 || status > 599)
+  ) {
+    throw new TypeError("Route response status must be an HTTP status code from 100 to 599");
+  }
+  if (contentType !== undefined && typeof contentType !== "string") {
+    throw new TypeError("Route response contentType must be a string");
+  }
+  if (body !== undefined && typeof body !== "string") {
+    throw new TypeError("Route response body must be a string");
+  }
+
+  return { abort, status, contentType, body };
+}
+
 function toServerImpl<T>(clientObject: unknown, label: string): T {
   const connection = (clientObject as { _connection?: { toImpl?: (value: unknown) => unknown } })
     ._connection;
@@ -345,6 +380,8 @@ export class QuickJSSandbox {
             this.#actionByIndex(name, index, "select", value),
           checkByIndex: (name, index, checked) =>
             this.#actionByIndex(name, index, "check", checked),
+          route: (name, pattern, response) => this.#route(name, pattern, response),
+          unroute: (name, pattern) => this.#unroute(name, pattern),
           saveScreenshot: (name, data) => this.#writeTempFile(name, data),
           writeFile: (name, data) => this.#writeTempFile(name, data),
           readFile: (name, options) => this.#readTempFile(name, options),
@@ -421,6 +458,101 @@ export class QuickJSSandbox {
             }
           };
 
+          // QuickJS has no TextEncoder/TextDecoder, so UTF-8 is converted by hand.
+          const __utf8Encode = (text) => {
+            const bytes = [];
+            for (let index = 0; index < text.length; index += 1) {
+              let code = text.charCodeAt(index);
+              if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+                const next = text.charCodeAt(index + 1);
+                if (next >= 0xdc00 && next <= 0xdfff) {
+                  code = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00);
+                  index += 1;
+                }
+              }
+              if (code >= 0xd800 && code <= 0xdfff) {
+                code = 0xfffd;
+              }
+              if (code < 0x80) {
+                bytes.push(code);
+              } else if (code < 0x800) {
+                bytes.push(0xc0 | (code >> 6), 0x80 | (code & 63));
+              } else if (code < 0x10000) {
+                bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+              } else {
+                bytes.push(
+                  0xf0 | (code >> 18),
+                  0x80 | ((code >> 12) & 63),
+                  0x80 | ((code >> 6) & 63),
+                  0x80 | (code & 63),
+                );
+              }
+            }
+            return bytes;
+          };
+
+          const __utf8Decode = (bytes) => {
+            const isContinuation = (offset) => (bytes[offset] & 0xc0) === 0x80;
+            const units = [];
+            let output = "";
+            for (let index = 0; index < bytes.length; ) {
+              const lead = bytes[index];
+              let code = 0xfffd;
+              let size = 1;
+              if (lead < 0x80) {
+                code = lead;
+              } else if (lead >= 0xc2 && lead < 0xe0 && isContinuation(index + 1)) {
+                code = ((lead & 0x1f) << 6) | (bytes[index + 1] & 63);
+                size = 2;
+              } else if (lead >= 0xe0 && lead < 0xf0 && isContinuation(index + 1) && isContinuation(index + 2)) {
+                const value = ((lead & 0x0f) << 12) | ((bytes[index + 1] & 63) << 6) | (bytes[index + 2] & 63);
+                if (value >= 0x800 && (value < 0xd800 || value > 0xdfff)) {
+                  code = value;
+                  size = 3;
+                }
+              } else if (
+                lead >= 0xf0 &&
+                lead < 0xf5 &&
+                isContinuation(index + 1) &&
+                isContinuation(index + 2) &&
+                isContinuation(index + 3)
+              ) {
+                const value =
+                  ((lead & 0x07) << 18) |
+                  ((bytes[index + 1] & 63) << 12) |
+                  ((bytes[index + 2] & 63) << 6) |
+                  (bytes[index + 3] & 63);
+                if (value >= 0x10000 && value <= 0x10ffff) {
+                  code = value;
+                  size = 4;
+                }
+              }
+              if (code >= 0x10000) {
+                code -= 0x10000;
+                units.push(0xd800 + (code >> 10), 0xdc00 + (code & 0x3ff));
+              } else {
+                units.push(code);
+              }
+              index += size;
+              if (units.length >= 8192) {
+                output += String.fromCharCode(...units);
+                units.length = 0;
+              }
+            }
+            return output + String.fromCharCode(...units);
+          };
+
+          const __bufferEncoding = (encoding) => {
+            const normalized = String(encoding ?? "utf8").toLowerCase();
+            if (normalized === "utf8" || normalized === "utf-8") {
+              return "utf8";
+            }
+            if (normalized === "base64" || normalized === "latin1" || normalized === "binary") {
+              return normalized === "binary" ? "latin1" : normalized;
+            }
+            throw new Error(\`QuickJS Buffer does not support the "\${encoding}" encoding\`);
+          };
+
           globalThis.Buffer ??= class Buffer extends Uint8Array {
             constructor(value, byteOffset, length) {
               if (typeof value === "number") {
@@ -440,10 +572,14 @@ export class QuickJSSandbox {
 
             static from(value, encodingOrOffset, length) {
               if (typeof value === "string") {
-                if (encodingOrOffset !== undefined && encodingOrOffset !== "base64") {
-                  throw new Error("QuickJS Buffer only supports base64 string input");
+                const encoding = __bufferEncoding(encodingOrOffset);
+                if (encoding === "base64") {
+                  return new Buffer(__decodeBase64(value));
                 }
-                return new Buffer(__decodeBase64(value));
+                if (encoding === "latin1") {
+                  return new Buffer(Array.from(value, (char) => char.charCodeAt(0) & 255));
+                }
+                return new Buffer(__utf8Encode(value));
               }
               if (value instanceof ArrayBuffer) {
                 return new Buffer(value, encodingOrOffset, length);
@@ -462,16 +598,43 @@ export class QuickJSSandbox {
               throw new TypeError("Unsupported Buffer.from input");
             }
 
-            toString(encoding) {
-              if (encoding === undefined || encoding === "utf8") {
-                return Array.from(this)
-                  .map((value) => String.fromCharCode(value))
-                  .join("");
+            static isBuffer(value) {
+              return value instanceof Buffer;
+            }
+
+            static byteLength(value, encoding) {
+              if (typeof value === "string") {
+                return Buffer.from(value, encoding).byteLength;
               }
-              if (encoding === "base64") {
+              if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+                return value.byteLength;
+              }
+              throw new TypeError("Buffer.byteLength expects a string, Buffer, or ArrayBuffer");
+            }
+
+            static concat(list, totalLength) {
+              const length = totalLength ?? list.reduce((sum, item) => sum + item.length, 0);
+              const result = new Buffer(length);
+              let offset = 0;
+              for (const item of list) {
+                if (offset >= length) {
+                  break;
+                }
+                result.set(item.subarray(0, length - offset), offset);
+                offset += item.length;
+              }
+              return result;
+            }
+
+            toString(encoding) {
+              const normalized = __bufferEncoding(encoding);
+              if (normalized === "base64") {
                 return __encodeBase64(this);
               }
-              throw new Error("QuickJS Buffer only supports utf8 and base64 output");
+              if (normalized === "latin1") {
+                return Array.from(this, (value) => String.fromCharCode(value)).join("");
+              }
+              return __utf8Decode(this);
             }
           };
 
@@ -771,6 +934,20 @@ export class QuickJSSandbox {
                     }
                     const raw = await hostCall("checkElement", JSON.stringify([pageName, indexOrSelector, checked]));
                     return typeof raw === "string" ? JSON.parse(raw) : raw;
+                  },
+                  enumerable: true,
+                },
+                // Unlike page.route(), these routes outlive the script: the host keeps
+                // them on the named page until browser.unroute() or the page closes.
+                route: {
+                  value: async (pageName, pattern, response) => {
+                    await hostCall("route", JSON.stringify([pageName, pattern, response ?? null]));
+                  },
+                  enumerable: true,
+                },
+                unroute: {
+                  value: async (pageName, pattern) => {
+                    await hostCall("unroute", JSON.stringify([pageName, pattern ?? null]));
                   },
                   enumerable: true,
                 },
@@ -1317,6 +1494,52 @@ export class QuickJSSandbox {
     }
 
     return JSON.stringify({ success: false, error: `Unknown action: ${action}` });
+  }
+
+  // Routes a script registers with page.route() end with the script, because their
+  // handlers live in the sandbox. browser.route() registers on the host page instead,
+  // so a mock set by one CLI call still applies to the next ones.
+
+  async #route(name: unknown, pattern: unknown, response: unknown): Promise<void> {
+    const page = (await this.#options.manager.getPage(
+      this.#options.browserName,
+      requireString(name, "Page name or targetId")
+    )) as Page;
+    const url = requireString(pattern, "URL pattern");
+    const mock = parseRouteResponse(response);
+
+    // Replace an earlier route for the same pattern instead of stacking another one.
+    await page.unroute(url);
+    await page.route(url, async (route) => {
+      try {
+        if (mock.abort) {
+          await route.abort();
+        } else if (mock.status !== undefined || mock.body !== undefined) {
+          await route.fulfill({
+            status: mock.status ?? 200,
+            contentType: mock.contentType,
+            body: mock.body ?? "",
+          });
+        } else {
+          await route.fallback();
+        }
+      } catch {
+        // The handler runs in the daemon, where an unhandled rejection is fatal.
+        // Failures here mean the page or request went away.
+      }
+    });
+  }
+
+  async #unroute(name: unknown, pattern: unknown): Promise<void> {
+    const page = (await this.#options.manager.getPage(
+      this.#options.browserName,
+      requireString(name, "Page name or targetId")
+    )) as Page;
+    if (pattern === null || pattern === undefined) {
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+      return;
+    }
+    await page.unroute(requireString(pattern, "URL pattern"));
   }
 
   async #clickAt(

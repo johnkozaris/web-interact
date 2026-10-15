@@ -202,7 +202,7 @@ describe("QuickJS sandbox security", () => {
       "check", "checkElement", "click", "clickAt", "clickElement",
       "closePage", "discover", "drag", "fillElement",
       "getPage", "getPageElements", "listPages", "newPage",
-      "select", "selectOption", "type", "waitForSettled"
+      "route", "select", "selectOption", "type", "unroute", "waitForSettled"
     ]);
     expect(payload.browserHasNullPrototype).toBe(true);
   }, 120_000);
