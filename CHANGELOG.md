@@ -8,6 +8,17 @@
 - Sandbox scripts can use 1.64's `page.screencast` and `tracing.startHar()`/`stopHar()`. Traces, HARs, and screencast recordings are saved into the controlled temp directory, like screenshots.
 - `playwright.devices` is populated inside the sandbox instead of being empty.
 - The first-run runtime install uses pnpm 12.
+- `console` shows the messages and uncaught errors logged since the page last navigated, including those from earlier commands, instead of listening for 300 ms. `--level warn` now matches `console.warn()`, and `--clear` empties the buffer after printing.
+- `network route` replaces an earlier route for the same pattern, and `--status` works without `--body`.
+- In sandbox scripts, `Buffer.from(string)` defaults to UTF-8 like Node, instead of base64. `Buffer` also gains `byteLength`, `concat`, `isBuffer`, and `latin1` support.
+
+### Added
+- `browser.route(page, pattern, response)` and `browser.unroute(page, pattern?)` for scripts: mocks that stay on the page across scripts until removed.
+
+### Fixed
+- `discover` showed every checkbox and radio button as `[checked]`. It now shows `[checked]` only when checked and `[checked=mixed]` when indeterminate. Toggle buttons show `[pressed]`, which was never shown before.
+- `network route`, `network block`, and `network unroute` had no effect, because the route ended with the command that set it. Routes now stay on the page until removed.
+- `page.route()` handlers that called `route.fulfill()` hung until the script timed out.
 
 ### Infrastructure
 - pnpm 12, TypeScript 7, and vitest 5 for development; CI tests the daemon on Node 22 and 24 and checks that the committed `daemon/dist` bundles are current.

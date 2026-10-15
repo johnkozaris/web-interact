@@ -21124,6 +21124,11 @@ function getElementHint(el) {
   }
   return null;
 }
+function tristateLabel(name, value) {
+  if (value === true || value === "true") return name;
+  if (value === "mixed") return `${name}=mixed`;
+  return null;
+}
 function formatElement(el, axProps, compoundHint, selectHint, isNew) {
   const parts = [];
   parts.push(`${isNew ? "*" : ""}[${el.index}]`);
@@ -21158,9 +21163,11 @@ function formatElement(el, axProps, compoundHint, selectHint, isNew) {
   if (el.attributes["accesskey"]) parts.push(`accesskey=${el.attributes["accesskey"]}`);
   const states = [];
   for (const prop of axProps) {
-    if (prop.name === "checked" && prop.value) states.push("checked");
+    if (prop.name === "checked" || prop.name === "pressed") {
+      const state = tristateLabel(prop.name, prop.value);
+      if (state) states.push(state);
+    }
     if (prop.name === "expanded" && prop.value === true) states.push("expanded");
-    if (prop.name === "pressed" && prop.value === true) states.push("pressed");
     if (prop.name === "disabled" && prop.value === true) states.push("disabled");
     if (prop.name === "required" && prop.value === true) states.push("required");
     if (prop.name === "readonly" && prop.value === true) states.push("readonly");
@@ -22574,7 +22581,6 @@ var HostBridge = class {
   playwright;
   sendToSandbox;
   options;
-  dispatchQueue = Promise.resolve();
   playwrightDispatcher;
   disposed = false;
   constructor(options) {
@@ -22603,11 +22609,7 @@ var HostBridge = class {
   }
   async receiveFromSandbox(json2) {
     const message = JSON.parse(json2);
-    const dispatch = this.dispatchQueue.then(async () => {
-      await this.dispatcherConnection.dispatch(message);
-    });
-    this.dispatchQueue = dispatch.catch(() => void 0);
-    await dispatch;
+    await this.dispatcherConnection.dispatch(message);
   }
   async dispose() {
     if (this.disposed) {
@@ -23304,6 +23306,28 @@ function requireString(value, label) {
   }
   return value;
 }
+function parseRouteResponse(value) {
+  if (value === null || value === void 0) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Route response must be an object");
+  }
+  const { abort, status, contentType, body } = value;
+  if (abort !== void 0 && typeof abort !== "boolean") {
+    throw new TypeError("Route response abort must be a boolean");
+  }
+  if (status !== void 0 && (typeof status !== "number" || !Number.isInteger(status) || status < 100 || status > 599)) {
+    throw new TypeError("Route response status must be an HTTP status code from 100 to 599");
+  }
+  if (contentType !== void 0 && typeof contentType !== "string") {
+    throw new TypeError("Route response contentType must be a string");
+  }
+  if (body !== void 0 && typeof body !== "string") {
+    throw new TypeError("Route response body must be a string");
+  }
+  return { abort, status, contentType, body };
+}
 function toServerImpl2(clientObject, label) {
   const connection = clientObject._connection;
   const toImpl = connection?.toImpl;
@@ -23388,6 +23412,8 @@ var QuickJSSandbox = class {
           typeByIndex: (name, index, text, options) => this.#actionByIndex(name, index, "type", text, options),
           selectByIndex: (name, index, value) => this.#actionByIndex(name, index, "select", value),
           checkByIndex: (name, index, checked) => this.#actionByIndex(name, index, "check", checked),
+          route: (name, pattern, response) => this.#route(name, pattern, response),
+          unroute: (name, pattern) => this.#unroute(name, pattern),
           saveScreenshot: (name, data) => this.#writeTempFile(name, data),
           writeFile: (name, data) => this.#writeTempFile(name, data),
           readFile: (name, options) => this.#readTempFile(name, options),
@@ -23463,6 +23489,101 @@ var QuickJSSandbox = class {
             }
           };
 
+          // QuickJS has no TextEncoder/TextDecoder, so UTF-8 is converted by hand.
+          const __utf8Encode = (text) => {
+            const bytes = [];
+            for (let index = 0; index < text.length; index += 1) {
+              let code = text.charCodeAt(index);
+              if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+                const next = text.charCodeAt(index + 1);
+                if (next >= 0xdc00 && next <= 0xdfff) {
+                  code = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00);
+                  index += 1;
+                }
+              }
+              if (code >= 0xd800 && code <= 0xdfff) {
+                code = 0xfffd;
+              }
+              if (code < 0x80) {
+                bytes.push(code);
+              } else if (code < 0x800) {
+                bytes.push(0xc0 | (code >> 6), 0x80 | (code & 63));
+              } else if (code < 0x10000) {
+                bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+              } else {
+                bytes.push(
+                  0xf0 | (code >> 18),
+                  0x80 | ((code >> 12) & 63),
+                  0x80 | ((code >> 6) & 63),
+                  0x80 | (code & 63),
+                );
+              }
+            }
+            return bytes;
+          };
+
+          const __utf8Decode = (bytes) => {
+            const isContinuation = (offset) => (bytes[offset] & 0xc0) === 0x80;
+            const units = [];
+            let output = "";
+            for (let index = 0; index < bytes.length; ) {
+              const lead = bytes[index];
+              let code = 0xfffd;
+              let size = 1;
+              if (lead < 0x80) {
+                code = lead;
+              } else if (lead >= 0xc2 && lead < 0xe0 && isContinuation(index + 1)) {
+                code = ((lead & 0x1f) << 6) | (bytes[index + 1] & 63);
+                size = 2;
+              } else if (lead >= 0xe0 && lead < 0xf0 && isContinuation(index + 1) && isContinuation(index + 2)) {
+                const value = ((lead & 0x0f) << 12) | ((bytes[index + 1] & 63) << 6) | (bytes[index + 2] & 63);
+                if (value >= 0x800 && (value < 0xd800 || value > 0xdfff)) {
+                  code = value;
+                  size = 3;
+                }
+              } else if (
+                lead >= 0xf0 &&
+                lead < 0xf5 &&
+                isContinuation(index + 1) &&
+                isContinuation(index + 2) &&
+                isContinuation(index + 3)
+              ) {
+                const value =
+                  ((lead & 0x07) << 18) |
+                  ((bytes[index + 1] & 63) << 12) |
+                  ((bytes[index + 2] & 63) << 6) |
+                  (bytes[index + 3] & 63);
+                if (value >= 0x10000 && value <= 0x10ffff) {
+                  code = value;
+                  size = 4;
+                }
+              }
+              if (code >= 0x10000) {
+                code -= 0x10000;
+                units.push(0xd800 + (code >> 10), 0xdc00 + (code & 0x3ff));
+              } else {
+                units.push(code);
+              }
+              index += size;
+              if (units.length >= 8192) {
+                output += String.fromCharCode(...units);
+                units.length = 0;
+              }
+            }
+            return output + String.fromCharCode(...units);
+          };
+
+          const __bufferEncoding = (encoding) => {
+            const normalized = String(encoding ?? "utf8").toLowerCase();
+            if (normalized === "utf8" || normalized === "utf-8") {
+              return "utf8";
+            }
+            if (normalized === "base64" || normalized === "latin1" || normalized === "binary") {
+              return normalized === "binary" ? "latin1" : normalized;
+            }
+            throw new Error(\`QuickJS Buffer does not support the "\${encoding}" encoding\`);
+          };
+
           globalThis.Buffer ??= class Buffer extends Uint8Array {
             constructor(value, byteOffset, length) {
               if (typeof value === "number") {
@@ -23482,10 +23603,14 @@ var QuickJSSandbox = class {
 
             static from(value, encodingOrOffset, length) {
               if (typeof value === "string") {
-                if (encodingOrOffset !== undefined && encodingOrOffset !== "base64") {
-                  throw new Error("QuickJS Buffer only supports base64 string input");
+                const encoding = __bufferEncoding(encodingOrOffset);
+                if (encoding === "base64") {
+                  return new Buffer(__decodeBase64(value));
                 }
-                return new Buffer(__decodeBase64(value));
+                if (encoding === "latin1") {
+                  return new Buffer(Array.from(value, (char) => char.charCodeAt(0) & 255));
+                }
+                return new Buffer(__utf8Encode(value));
               }
               if (value instanceof ArrayBuffer) {
                 return new Buffer(value, encodingOrOffset, length);
@@ -23504,16 +23629,43 @@ var QuickJSSandbox = class {
               throw new TypeError("Unsupported Buffer.from input");
             }
 
-            toString(encoding) {
-              if (encoding === undefined || encoding === "utf8") {
-                return Array.from(this)
-                  .map((value) => String.fromCharCode(value))
-                  .join("");
+            static isBuffer(value) {
+              return value instanceof Buffer;
+            }
+
+            static byteLength(value, encoding) {
+              if (typeof value === "string") {
+                return Buffer.from(value, encoding).byteLength;
               }
-              if (encoding === "base64") {
+              if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+                return value.byteLength;
+              }
+              throw new TypeError("Buffer.byteLength expects a string, Buffer, or ArrayBuffer");
+            }
+
+            static concat(list, totalLength) {
+              const length = totalLength ?? list.reduce((sum, item) => sum + item.length, 0);
+              const result = new Buffer(length);
+              let offset = 0;
+              for (const item of list) {
+                if (offset >= length) {
+                  break;
+                }
+                result.set(item.subarray(0, length - offset), offset);
+                offset += item.length;
+              }
+              return result;
+            }
+
+            toString(encoding) {
+              const normalized = __bufferEncoding(encoding);
+              if (normalized === "base64") {
                 return __encodeBase64(this);
               }
-              throw new Error("QuickJS Buffer only supports utf8 and base64 output");
+              if (normalized === "latin1") {
+                return Array.from(this, (value) => String.fromCharCode(value)).join("");
+              }
+              return __utf8Decode(this);
             }
           };
 
@@ -23805,6 +23957,20 @@ return __PlaywrightClient;`);
                     }
                     const raw = await hostCall("checkElement", JSON.stringify([pageName, indexOrSelector, checked]));
                     return typeof raw === "string" ? JSON.parse(raw) : raw;
+                  },
+                  enumerable: true,
+                },
+                // Unlike page.route(), these routes outlive the script: the host keeps
+                // them on the named page until browser.unroute() or the page closes.
+                route: {
+                  value: async (pageName, pattern, response) => {
+                    await hostCall("route", JSON.stringify([pageName, pattern, response ?? null]));
+                  },
+                  enumerable: true,
+                },
+                unroute: {
+                  value: async (pageName, pattern) => {
+                    await hostCall("unroute", JSON.stringify([pageName, pattern ?? null]));
                   },
                   enumerable: true,
                 },
@@ -24254,6 +24420,45 @@ return __PlaywrightClient;`);
       return JSON.stringify({ ...result, element: elContext });
     }
     return JSON.stringify({ success: false, error: `Unknown action: ${action}` });
+  }
+  // Routes a script registers with page.route() end with the script, because their
+  // handlers live in the sandbox. browser.route() registers on the host page instead,
+  // so a mock set by one CLI call still applies to the next ones.
+  async #route(name, pattern, response) {
+    const page = await this.#options.manager.getPage(
+      this.#options.browserName,
+      requireString(name, "Page name or targetId")
+    );
+    const url2 = requireString(pattern, "URL pattern");
+    const mock = parseRouteResponse(response);
+    await page.unroute(url2);
+    await page.route(url2, async (route) => {
+      try {
+        if (mock.abort) {
+          await route.abort();
+        } else if (mock.status !== void 0 || mock.body !== void 0) {
+          await route.fulfill({
+            status: mock.status ?? 200,
+            contentType: mock.contentType,
+            body: mock.body ?? ""
+          });
+        } else {
+          await route.fallback();
+        }
+      } catch {
+      }
+    });
+  }
+  async #unroute(name, pattern) {
+    const page = await this.#options.manager.getPage(
+      this.#options.browserName,
+      requireString(name, "Page name or targetId")
+    );
+    if (pattern === null || pattern === void 0) {
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+      return;
+    }
+    await page.unroute(requireString(pattern, "URL pattern"));
   }
   async #clickAt(name, x, y, options) {
     const page = await this.#options.manager.getPage(
