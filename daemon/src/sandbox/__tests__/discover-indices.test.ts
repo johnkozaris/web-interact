@@ -41,6 +41,46 @@ const INPUTS_PAGE_HTML = `<!doctype html>
   </body>
 </html>`;
 
+// After discover, the test disables, hides and redirects these; Plain keeps focus throughout.
+const UNFOCUSABLE_PAGE_HTML = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Index Focus</title>
+  </head>
+  <body>
+    <input id="plain" aria-label="Plain" autofocus>
+    <input id="disabled" aria-label="Disabled later">
+    <input id="hidden" aria-label="Hidden later">
+    <input id="redirecting" aria-label="Redirecting">
+  </body>
+</html>`;
+
+// Fields that take focus in their own way: an editable div, and inputs in an open and a
+// closed shadow root. The closed one copies its value to its host so tests can read it.
+const WIDGETS_PAGE_HTML = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Index Widgets</title>
+  </head>
+  <body>
+    <div id="notes" contenteditable="true" role="textbox" aria-label="Notes"></div>
+    <div id="open-host"></div>
+    <div id="closed-host"></div>
+    <script>
+      document.getElementById("open-host").attachShadow({ mode: "open" }).innerHTML =
+        '<input aria-label="Open shadow">';
+      const closedHost = document.getElementById("closed-host");
+      const closedRoot = closedHost.attachShadow({ mode: "closed" });
+      closedRoot.innerHTML = '<input aria-label="Closed shadow">';
+      closedRoot.querySelector("input").addEventListener("input", (event) => {
+        closedHost.dataset.value = event.target.value;
+      });
+    </script>
+  </body>
+</html>`;
+
 interface IndexTestSite {
   origin: string;
   close: () => Promise<void>;
@@ -60,6 +100,10 @@ async function startIndexTestSite(): Promise<IndexTestSite> {
       html = indexPageHtml({ banner: shiftingLoads > 1 });
     } else if (pathname === "/inputs") {
       html = INPUTS_PAGE_HTML;
+    } else if (pathname === "/unfocusable") {
+      html = UNFOCUSABLE_PAGE_HTML;
+    } else if (pathname === "/widgets") {
+      html = WIDGETS_PAGE_HTML;
     } else {
       response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       response.end("not found");
@@ -87,7 +131,7 @@ async function startIndexTestSite(): Promise<IndexTestSite> {
   };
 }
 
-describe("discover indices across navigations", () => {
+describe("acting by discover index", () => {
   let browserRootDir = "";
   let manager: BrowserManager;
   let site: IndexTestSite;
@@ -134,6 +178,27 @@ describe("discover indices across navigations", () => {
     run(`
       const page = await browser.getPage(${JSON.stringify(pageName)});
       console.log(await page.evaluate(() => document.body.dataset.clicked ?? "nothing"));
+    `);
+
+  const type = async (
+    pageName: string,
+    index: number,
+    text: string,
+    options: { clearFirst?: boolean } = {}
+  ): Promise<{ success: boolean; error?: string }> =>
+    JSON.parse(
+      await run(
+        `console.log(JSON.stringify(await browser.type(${JSON.stringify(pageName)}, ${index}, ${JSON.stringify(text)}, ${JSON.stringify(options)})));`
+      )
+    );
+
+  // The values of the inputs page's First and Second fields, as "first|second".
+  const fieldValues = (pageName: string): Promise<string> =>
+    run(`
+      const page = await browser.getPage(${JSON.stringify(pageName)});
+      console.log(await page.evaluate(() =>
+        document.getElementById("first").value + "|" + document.getElementById("second").value
+      ));
     `);
 
   beforeAll(async () => {
@@ -204,17 +269,82 @@ describe("discover indices across navigations", () => {
 
     // The reload puts focus back on First, which is where keys sent to a stale node land.
     await run(`await (await browser.getPage("typing")).reload();`);
-    expect(
-      JSON.parse(await run(`console.log(JSON.stringify(await browser.type("typing", ${second}, "typed")));`))
-    ).toMatchObject({ success: true });
+    expect(await type("typing", second, "typed")).toMatchObject({ success: true });
+    expect(await fieldValues("typing")).toBe("|typed");
+  }, 120_000);
+
+  it("refuses to type into a field that was replaced since discover", async () => {
+    await open("replaced", `${site.origin}/inputs`);
+    const second = (await discoverNames("replaced")).indexOf("Second") + 1;
+    expect(second).toBeGreaterThan(0);
+
+    // Like a re-render: Second is swapped for a copy in the same document, so the URL
+    // and document are unchanged, the discovered node is detached, and First has focus.
+    await run(`
+      const page = await browser.getPage("replaced");
+      await page.evaluate(() => {
+        const old = document.getElementById("second");
+        old.replaceWith(old.cloneNode());
+      });
+    `);
+    const refused = { success: false, error: expect.stringContaining("could not be focused") };
+    expect(await type("replaced", second, "typed")).toMatchObject(refused);
+    expect(await type("replaced", second, "filled", { clearFirst: true })).toMatchObject(refused);
+    expect(await fieldValues("replaced")).toBe("|");
+
+    const fresh = (await discoverNames("replaced")).indexOf("Second") + 1;
+    expect(await type("replaced", fresh, "typed")).toMatchObject({ success: true });
+    expect(await fieldValues("replaced")).toBe("|typed");
+  }, 120_000);
+
+  it("refuses to type into a field that is disabled, hidden or hands focus away", async () => {
+    await open("unfocusable", `${site.origin}/unfocusable`);
+    const names = await discoverNames("unfocusable");
+    await run(`
+      const page = await browser.getPage("unfocusable");
+      await page.evaluate(() => {
+        document.getElementById("disabled").disabled = true;
+        document.getElementById("hidden").style.display = "none";
+        const plain = document.getElementById("plain");
+        document.getElementById("redirecting").addEventListener("focus", () => plain.focus());
+      });
+    `);
+    for (const name of ["Disabled later", "Hidden later", "Redirecting"]) {
+      const index = names.indexOf(name) + 1;
+      expect(index, names.join(", ")).toBeGreaterThan(0);
+      expect(await type("unfocusable", index, "x"), name).toMatchObject({
+        success: false,
+        error: expect.stringContaining("could not be focused"),
+      });
+    }
     expect(
       await run(`
-        const page = await browser.getPage("typing");
+        const page = await browser.getPage("unfocusable");
         console.log(await page.evaluate(() =>
-          document.getElementById("first").value + "|" + document.getElementById("second").value
+          [...document.querySelectorAll("input")].map((input) => input.value).join("|")
         ));
       `)
-    ).toBe("|typed");
+    ).toBe("|||");
+  }, 120_000);
+
+  it("types by index into an editable div and inputs in shadow roots", async () => {
+    await open("widgets", `${site.origin}/widgets`);
+    const names = await discoverNames("widgets");
+    for (const name of ["Notes", "Open shadow", "Closed shadow"]) {
+      const index = names.indexOf(name) + 1;
+      expect(index, names.join(", ")).toBeGreaterThan(0);
+      expect(await type("widgets", index, name.toLowerCase())).toMatchObject({ success: true });
+    }
+    expect(
+      await run(`
+        const page = await browser.getPage("widgets");
+        console.log(await page.evaluate(() => [
+          document.getElementById("notes").textContent,
+          document.getElementById("open-host").shadowRoot.querySelector("input").value,
+          document.getElementById("closed-host").dataset.value,
+        ].join("|")));
+      `)
+    ).toBe("notes|open shadow|closed shadow");
   }, 120_000);
 
   it("re-discovers after navigating to another URL", async () => {
