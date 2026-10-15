@@ -21741,6 +21741,7 @@ async function getElementCenter(session, backendNodeId) {
       objectId: object2.objectId,
       functionDeclaration: `function() {
         var r = this.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return null;
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }`,
       returnByValue: true
@@ -21759,6 +21760,7 @@ async function scrollIntoView(session, backendNodeId) {
   } catch {
   }
 }
+var NOT_SHOWN_ERROR = "Element is no longer shown on the page, so nothing was clicked. It may have been removed, replaced or hidden since discover. Run discover again.";
 function randomDwell() {
   return 40 + Math.floor(Math.random() * 80);
 }
@@ -21767,32 +21769,33 @@ async function cdpClick(session, backendNodeId, options) {
   try {
     await scrollIntoView(session, backendNodeId);
     const center = await getElementCenter(session, backendNodeId);
-    if (center) {
-      try {
-        await session.send("Input.dispatchMouseEvent", {
-          type: "mouseMoved",
-          x: center.x,
-          y: center.y
-        });
-        await new Promise((r) => setTimeout(r, 20 + Math.floor(Math.random() * 30)));
-        await session.send("Input.dispatchMouseEvent", {
-          type: "mousePressed",
-          x: center.x,
-          y: center.y,
-          button,
-          clickCount: 1
-        });
-        await new Promise((r) => setTimeout(r, randomDwell()));
-        await session.send("Input.dispatchMouseEvent", {
-          type: "mouseReleased",
-          x: center.x,
-          y: center.y,
-          button,
-          clickCount: 1
-        });
-        return { success: true, method: "cdp-mouse" };
-      } catch {
-      }
+    if (!center) {
+      return { success: false, method: "failed", error: NOT_SHOWN_ERROR };
+    }
+    try {
+      await session.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: center.x,
+        y: center.y
+      });
+      await new Promise((r) => setTimeout(r, 20 + Math.floor(Math.random() * 30)));
+      await session.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: center.x,
+        y: center.y,
+        button,
+        clickCount: 1
+      });
+      await new Promise((r) => setTimeout(r, randomDwell()));
+      await session.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: center.x,
+        y: center.y,
+        button,
+        clickCount: 1
+      });
+      return { success: true, method: "cdp-mouse" };
+    } catch {
     }
     let objectId;
     try {
