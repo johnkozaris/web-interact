@@ -55,7 +55,8 @@ async function getElementCenter(
     }
   } catch { /* try next method */ }
 
-  // Method 3: JS getBoundingClientRect via CDP
+  // Method 3: JS getBoundingClientRect via CDP. An element with no box, because it was
+  // removed or hidden, measures 0x0 at the top-left corner, which is not its center.
   try {
     const { object } = (await session.send("DOM.resolveNode", {
       backendNodeId,
@@ -66,6 +67,7 @@ async function getElementCenter(
       objectId: object.objectId,
       functionDeclaration: `function() {
         var r = this.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return null;
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }`,
       returnByValue: true,
@@ -107,6 +109,11 @@ export interface CDPClickResult {
   error?: string;
 }
 
+// discover only lists elements that have a box, so one without a box was removed or
+// hidden since. Clicking anyway would hit another element, or a node off the page.
+const NOT_SHOWN_ERROR =
+  "Element is no longer shown on the page, so nothing was clicked. It may have been removed, replaced or hidden since discover. Run discover again.";
+
 /**
  * Randomized dwell time between mousedown and mouseup.
  * From anti-detection research: humans dwell 40-120ms with variation.
@@ -129,44 +136,45 @@ export async function cdpClick(
 
     // Get click coordinates
     const center = await getElementCenter(session, backendNodeId);
+    if (!center) {
+      return { success: false, method: "failed", error: NOT_SHOWN_ERROR };
+    }
 
-    if (center) {
-      try {
-        // Step 1: Move mouse to element
-        await session.send("Input.dispatchMouseEvent", {
-          type: "mouseMoved",
-          x: center.x,
-          y: center.y,
-        });
+    try {
+      // Step 1: Move mouse to element
+      await session.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: center.x,
+        y: center.y,
+      });
 
-        // Step 2: Randomized dwell between move and click (anti-detection)
-        await new Promise((r) => setTimeout(r, 20 + Math.floor(Math.random() * 30)));
+      // Step 2: Randomized dwell between move and click (anti-detection)
+      await new Promise((r) => setTimeout(r, 20 + Math.floor(Math.random() * 30)));
 
-        // Step 3: mousePressed
-        await session.send("Input.dispatchMouseEvent", {
-          type: "mousePressed",
-          x: center.x,
-          y: center.y,
-          button,
-          clickCount: 1,
-        });
+      // Step 3: mousePressed
+      await session.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: center.x,
+        y: center.y,
+        button,
+        clickCount: 1,
+      });
 
-        // Step 4: Randomized dwell time (40-120ms, from anti-detection research)
-        await new Promise((r) => setTimeout(r, randomDwell()));
+      // Step 4: Randomized dwell time (40-120ms, from anti-detection research)
+      await new Promise((r) => setTimeout(r, randomDwell()));
 
-        // Step 5: mouseReleased
-        await session.send("Input.dispatchMouseEvent", {
-          type: "mouseReleased",
-          x: center.x,
-          y: center.y,
-          button,
-          clickCount: 1,
-        });
+      // Step 5: mouseReleased
+      await session.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: center.x,
+        y: center.y,
+        button,
+        clickCount: 1,
+      });
 
-        return { success: true, method: "cdp-mouse" };
-      } catch {
-        // Fall through to JS click
-      }
+      return { success: true, method: "cdp-mouse" };
+    } catch {
+      // Fall through to JS click
     }
 
     // Fallback: JS click via CDP Runtime.callFunctionOn
@@ -206,14 +214,52 @@ export async function cdpClick(
 // CDP Focus
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether keys sent now would reach the element: it is still in the page, and the
+ * focused element, as its own document or shadow root sees it, is the element or
+ * inside it (such as the inner input of a component that delegates focus).
+ */
+async function hasFocus(
+  session: CDPSession,
+  backendNodeId: number
+): Promise<boolean> {
+  let objectId: string | undefined;
+  try {
+    const { object } = (await session.send("DOM.resolveNode", {
+      backendNodeId,
+    })) as { object?: { objectId?: string } };
+    objectId = object?.objectId;
+    if (!objectId) return false;
+
+    const { result } = (await session.send("Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function() {
+        if (!this.isConnected) return false;
+        var active = this.getRootNode().activeElement;
+        return !!active && this.contains(active);
+      }`,
+      returnByValue: true,
+    })) as { result?: { value?: unknown } };
+    return result?.value === true;
+  } catch {
+    // A node from a document the page has left no longer resolves
+    return false;
+  } finally {
+    if (objectId) {
+      await session.send("Runtime.releaseObject", { objectId }).catch(() => {});
+    }
+  }
+}
+
+/** Focus the element, and report whether it has focus afterwards. */
 async function cdpFocus(
   session: CDPSession,
   backendNodeId: number
-): Promise<void> {
+): Promise<boolean> {
   // Method 1: DOM.focus
   try {
     await session.send("DOM.focus", { backendNodeId });
-    return;
+    return await hasFocus(session, backendNodeId);
   } catch { /* try fallback */ }
 
   // Method 2: JS focus via CDP
@@ -229,6 +275,7 @@ async function cdpFocus(
       await session.send("Runtime.releaseObject", { objectId: object.objectId }).catch(() => {});
     }
   } catch { /* ignore */ }
+  return hasFocus(session, backendNodeId);
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +288,10 @@ export interface CDPTypeResult {
   method: "cdp-keys" | "cdp-insert" | "failed";
   error?: string;
 }
+
+// Keys go to whatever has focus, so without it they would land in another field.
+const NOT_FOCUSED_ERROR =
+  "Element could not be focused, so nothing was typed. It may have been removed, hidden or disabled since discover. Run discover again.";
 
 /**
  * Type text into an element using CDP keyboard events.
@@ -271,7 +322,9 @@ export async function cdpType(
 
   try {
     await scrollIntoView(session, backendNodeId);
-    await cdpFocus(session, backendNodeId);
+    if (!(await cdpFocus(session, backendNodeId))) {
+      return { success: false, method: "failed", error: NOT_FOCUSED_ERROR };
+    }
 
     // Clear existing text if requested — uses native value setter to work with React/Vue controlled inputs
     if (clearFirst) {
@@ -355,7 +408,9 @@ export async function cdpType(
   } catch (e) {
     // Fallback: try insertText (simpler but less compatible)
     try {
-      await cdpFocus(session, backendNodeId);
+      if (!(await cdpFocus(session, backendNodeId))) {
+        return { success: false, method: "failed", error: NOT_FOCUSED_ERROR };
+      }
       await session.send("Input.insertText", { text });
       return { success: true, method: "cdp-insert" };
     } catch {
